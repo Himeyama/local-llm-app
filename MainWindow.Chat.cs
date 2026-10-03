@@ -18,6 +18,7 @@ public sealed partial class MainWindow
     private readonly List<ChatSession> chatSessions = new();
     private readonly List<(string Name, string Data)> attachments = new();
     private readonly Dictionary<string, string> drafts = new();
+    private readonly Dictionary<string, Queue<JsonObject>> pendingMessages = new();
     private ChatSession? currentChat;
     private CancellationTokenSource? chatCancellation;
     private bool selectingSession;
@@ -110,7 +111,7 @@ public sealed partial class MainWindow
                 PrimaryButtonText = "削除", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Close };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary || closing || chatCancellation != null) return;
             chatStore.Delete(session);
-            chatSessions.Remove(session); drafts.Remove(session.Id);
+            chatSessions.Remove(session); drafts.Remove(session.Id); pendingMessages.Remove(session.Id);
             if (currentChat == session)
             {
                 currentChat = chatSessions.OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
@@ -140,23 +141,24 @@ public sealed partial class MainWindow
     {
         if (currentChat == null) return;
         bool busy = chatCancellation != null;
-        SendChatButton.IsEnabled = !busy && serverStatus.IsConnected;
+        SendChatButton.IsEnabled = serverStatus.IsConnected;
         StopChatButton.IsEnabled = busy;
-        SendChatButton.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
+        SendChatButton.Visibility = Visibility.Visible;
         StopChatButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         NewChatButton.IsEnabled = !busy;
         SessionList.IsEnabled = !busy;
         ChatWorkspaceButton.IsEnabled = !busy;
         ChatToolsButton.IsEnabled = !busy;
         ChatReasoningButton.IsEnabled = !busy;
-        AttachmentList.IsHitTestVisible = !busy;
-        ChatInput.IsEnabled = !busy;
-        AttachButton.IsEnabled = !busy;
+        AttachmentList.IsHitTestVisible = true;
+        ChatInput.IsEnabled = true;
+        AttachButton.IsEnabled = true;
     }
 
     private void RenderConversation()
     {
         if (closing || currentChat == null) return;
+        RenderPendingMessages();
         ToolTipService.SetToolTip(ChatWorkspaceButton, "作業フォルダー設定\n" + currentChat.Workspace);
         ChatMessages.Children.Clear(); streamingText = null;
         if (currentChat.Messages.Count == 0)
@@ -411,26 +413,62 @@ public sealed partial class MainWindow
 
     private async Task SendChatAsync()
     {
-        if (currentChat == null || chatCancellation != null || !serverStatus.IsConnected) return;
+        if (closing || currentChat == null || !serverStatus.IsConnected) return;
         var text = ChatInput.Text.Trim(); var session = currentChat;
+        if (!pendingMessages.TryGetValue(session.Id, out var pending)) pendingMessages[session.Id] = pending = new();
+        bool hasInput = text.Length > 0 || attachments.Count > 0;
+        bool retry = !hasInput && session.Messages.LastOrDefault()?["role"]?.GetValue<string>() is "user" or "tool";
+        if (hasInput)
+        {
+            JsonNode content = JsonValue.Create(text)!;
+            if (attachments.Count > 0)
+            {
+                var parts = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = text.Length > 0 ? text : "この画像について説明してください。" } };
+                foreach (var attachment in attachments) parts.Add(new JsonObject { ["type"] = "image_url", ["image_url"] = new JsonObject { ["url"] = attachment.Data } });
+                content = parts;
+            }
+            pending.Enqueue(new JsonObject { ["role"] = "user", ["content"] = content });
+            ChatInput.Text = ""; drafts.Remove(session.Id); attachments.Clear(); AttachmentList.Children.Clear(); AttachmentList.Visibility = Visibility.Collapsed;
+            RenderPendingMessages();
+            ChatInput.Focus(FocusState.Programmatic);
+        }
+        if (chatCancellation != null || (!retry && pending.Count == 0)) return;
+        do
+        {
+            var message = retry ? null : pending.Peek();
+            if (!await GenerateChatTurnAsync(session, message, pending)) break;
+            retry = false;
+        } while (!closing && serverStatus.IsConnected && pending.Count > 0);
+    }
+
+    private void RenderPendingMessages()
+    {
+        PendingChatMessages.Children.Clear();
+        if (currentChat != null && pendingMessages.TryGetValue(currentChat.Id, out var pending))
+        {
+            foreach (var message in pending)
+            {
+                var content = message["content"];
+                var text = content is JsonArray parts ? string.Join(" ", parts.Select(p => p?["type"]?.GetValue<string>() == "text" ? p["text"]?.GetValue<string>() : "[画像]")) : content?.GetValue<string>() ?? "";
+                PendingChatMessages.Children.Add(new TextBlock { Text = "送信待ち: " + text, TextTrimming = TextTrimming.CharacterEllipsis });
+            }
+        }
+        PendingChatScroll.Visibility = PendingChatMessages.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async Task<bool> GenerateChatTurnAsync(ChatSession session, JsonObject? message, Queue<JsonObject> pending)
+    {
         ChatSession? generationSession = null;
-        bool retry = text.Length == 0 && attachments.Count == 0 && session.Messages.LastOrDefault()?["role"]?.GetValue<string>() is "user" or "tool";
-        if (!retry && text.Length == 0 && attachments.Count == 0) return;
         try
         {
-            if (!retry)
+            if (message != null)
             {
-                JsonNode content = JsonValue.Create(text)!;
-                if (attachments.Count > 0)
-                {
-                    var parts = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = text.Length > 0 ? text : "この画像について説明してください。" } };
-                    foreach (var attachment in attachments) parts.Add(new JsonObject { ["type"] = "image_url", ["image_url"] = new JsonObject { ["url"] = attachment.Data } });
-                    content = parts;
-                }
-                session.Messages.Add(new JsonObject { ["role"] = "user", ["content"] = content });
+                var text = message["content"] is JsonValue value ? value.GetValue<string>() : "";
+                session.Messages.Add(message);
                 if (session.Title == "新しいチャット") session.Title = text.Length > 0 ? text[..Math.Min(36, text.Length)].Replace('\n', ' ') : "画像についてのチャット";
-                chatStore.Save(session);
-                ChatInput.Text = ""; drafts.Remove(session.Id); attachments.Clear(); AttachmentList.Children.Clear(); AttachmentList.Visibility = Visibility.Collapsed;
+                try { chatStore.Save(session); }
+                catch { session.Messages.Remove(message); throw; }
+                pending.Dequeue();
             }
             Notice.IsOpen = false;
             using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(30)); chatCancellation = cancellation;
@@ -454,7 +492,9 @@ public sealed partial class MainWindow
                 var snapshot = generationSession.Messages.Select(m => (JsonObject)m.DeepClone()).ToList();
                 DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.UpdatedAt = generationSession.UpdatedAt; RenderConversation(); } });
             }, cancellation.Token, reasoningEffort));
+            cancellation.Token.ThrowIfCancellationRequested();
             SetChatActivity("");
+            return true;
         }
         catch (OperationCanceledException) { if (!closing) SetChatActivity("停止しました。保存済みの会話から続けられます。空欄のまま送信すると再試行します。"); }
         catch (Exception ex) { if (!closing) { ShowError(ex.Message); SetChatActivity("応答を取得できませんでした。空欄のまま送信すると再試行します。"); } }
@@ -465,5 +505,6 @@ public sealed partial class MainWindow
             if (!closing) UpdateChatSpinner();
             if (!closing) { UpdateChatControls(); RenderConversation(); RefreshSessions(); }
         }
+        return false;
     }
 }
