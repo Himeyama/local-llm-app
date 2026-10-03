@@ -1,11 +1,15 @@
 <Window x:Class="LocalLlm.Gui.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-  <Grid x:Name="RootLayout" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+  <Window.SystemBackdrop><MicaBackdrop Kind="Base"/></Window.SystemBackdrop>
+  <Grid x:Name="RootLayout" Background="Transparent">
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <TitleBar x:Name="AppTitleBar" Title="Local LLM" Subtitle="ローカル AI ワークスペース"
               IsPaneToggleButtonVisible="True" PaneToggleRequested="OnPaneToggleRequested">
       <TitleBar.IconSource><FontIconSource Glyph="&#xE8F1;"/></TitleBar.IconSource>
     </TitleBar>
     <NavigationView x:Name="Navigation" Grid.Row="1" PaneDisplayMode="Auto" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" IsPaneToggleButtonVisible="False" IsTitleBarAutoPaddingEnabled="False" SelectionChanged="OnSelectionChanged" OpenPaneLength="230">
+      <NavigationView.Resources>
+        <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent"/>
+      </NavigationView.Resources>
       <NavigationView.PaneHeader><StackPanel Margin="16,20,0,20"><TextBlock Text="LOCAL LLM" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="ローカル AI ワークスペース" Opacity="0.6" Margin="0,6,0,0"/></StackPanel></NavigationView.PaneHeader>
       <NavigationView.MenuItems>
         <NavigationViewItem Content="llama-server" Tag="server" Icon="Setting" IsSelected="True"/>
@@ -17,11 +21,16 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <StackPanel><TextBlock x:Name="PageTitle" Text="llama-server" FontSize="28" FontWeight="SemiBold"/><TextBlock x:Name="Status" Text="接続状態を確認しています…" Opacity="0.7" Margin="0,8,0,0" TextWrapping="Wrap"/></StackPanel>
         <InfoBar x:Name="Notice" Grid.Row="1" IsOpen="False" IsClosable="True"/>
-        <Grid Grid.Row="2">
-          <ScrollViewer x:Name="FormScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" SizeChanged="OnFormSizeChanged">
+        <Grid Grid.Row="2" RowSpacing="12">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <CommandBar x:Name="ServerCommandBar" Visibility="Collapsed" DefaultLabelPosition="Right" IsDynamicOverflowEnabled="True" Background="Transparent">
+            <AppBarButton x:Name="ServerStartButton" Label="llama-server を起動" Icon="Play" Click="OnToggleServer"/>
+            <AppBarButton x:Name="ServerSaveButton" Label="設定を保存" Icon="Save" Click="OnSaveServerSettings"/>
+          </CommandBar>
+          <ScrollViewer x:Name="FormScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" SizeChanged="OnFormSizeChanged">
             <StackPanel x:Name="Form" Spacing="16" HorizontalAlignment="Left" Margin="0,0,0,16"/>
           </ScrollViewer>
-          <Grid x:Name="WebPanel" Visibility="Collapsed" RowSpacing="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Grid x:Name="WebPanel" Grid.RowSpan="2" Visibility="Collapsed" RowSpacing="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
             <CommandBar DefaultLabelPosition="Right" IsDynamicOverflowEnabled="True" Background="Transparent">
               <AppBarButton x:Name="StartWebButton" IsEnabled="False" Label="Open WebUI を起動" Icon="Play" Click="OnStartWeb"/>
               <AppBarButton x:Name="StopWebButton" IsEnabled="False" Label="停止" Icon="Stop" Click="OnStopWeb"/>
@@ -30,7 +39,7 @@
             </CommandBar>
             <WebView2 x:Name="Browser" Grid.Row="1" Visibility="Collapsed"/>
           </Grid>
-          <TextBox x:Name="LogView" Visibility="Collapsed" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Code, Noto Sans JP"/>
+          <TextBox x:Name="LogView" Grid.RowSpan="2" Visibility="Collapsed" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Code, Noto Sans JP" Background="Transparent"/>
         </Grid>
       </Grid>
     </NavigationView>

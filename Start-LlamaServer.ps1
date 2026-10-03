@@ -73,8 +73,11 @@ if (-not [System.IO.Path]::IsPathRooted($ServerExe)) {
     $ServerExe = Join-Path $PSScriptRoot $ServerExe
 }
 
-$modelPath = Join-Path $PSScriptRoot $ModelPath
-$mmprojPath = Join-Path $PSScriptRoot $MmprojPath
+# Defaults remain relative to this launcher; explicit absolute paths are accepted.
+if ([System.IO.Path]::IsPathRooted($ModelPath)) { $modelPath = [System.IO.Path]::GetFullPath($ModelPath) }
+else { $modelPath = Join-Path $PSScriptRoot $ModelPath }
+if ([System.IO.Path]::IsPathRooted($MmprojPath)) { $mmprojPath = [System.IO.Path]::GetFullPath($MmprojPath) }
+else { $mmprojPath = Join-Path $PSScriptRoot $MmprojPath }
 $modelAlias = [System.IO.Path]::GetFileNameWithoutExtension($modelPath)
 
 if (-not (Test-Path -LiteralPath $ServerExe -PathType Leaf)) {

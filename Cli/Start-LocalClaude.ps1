@@ -19,6 +19,8 @@ $Capture = $Capture -or $env:LOCAL_CLAUDE_CAPTURE -eq '1'
 Remove-Item Env:LOCAL_CLAUDE_CHILD -ErrorAction SilentlyContinue
 Remove-Item Env:LOCAL_CLAUDE_CAPTURE -ErrorAction SilentlyContinue
 
+. (Join-Path $PSScriptRoot 'Initialize-CliEnvironment.ps1')
+
 # Older revisions set these internal overrides in the caller's PowerShell
 # process. Environment changes survive after a script exits, so clear stale
 # values before using the supported --autocompact option below.
@@ -180,7 +182,8 @@ if ($ClaudeArgs.Count -eq 0 -and -not $ChildInteractive -and ([Console]::IsInput
     Start-Process -FilePath $shellExe -WorkingDirectory (Get-Location).Path -ArgumentList @('-NoExit', '-File', $PSCommandPath)
     exit 0
 }
-if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+$claudeCommand = Get-Command claude -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $claudeCommand) {
     Write-Error 'claude コマンドが見つかりません。Claude Code をインストールし、PATH に追加してください。'
     exit 1
 }
@@ -225,5 +228,5 @@ if ($useCompactPrompt -and $claudeInvocation -notcontains '--system-prompt') {
 $claudeInvocation = @('--autocompact', $autoCompactWindow, '--effort', $reasoningEffort) + $claudeInvocation
 
 Write-Host "Claude Code -> $env:ANTHROPIC_BASE_URL (model: $localModel; context: $serverContextTokens; effort: $reasoningEffort; bare: $useBareMode; compact: $useCompactPrompt)" -ForegroundColor Cyan
-& claude @claudeInvocation
+& $claudeCommand.Source @claudeInvocation
 exit $LASTEXITCODE

@@ -129,6 +129,15 @@ try
     Assert(logs.Any(s => s.Contains("MOCK-SERVER-OK") && s.Contains("--host 127.0.0.1") && s.Contains("--alias model") && s.Contains("-c 131072")), "Default executable resolution and model-relative arguments must reach the mock server");
     Assert(logs.Any(s => s.Contains("[launcher] 終了コード 0")), "Real launcher must succeed with a mock executable");
     Console.WriteLine("PASS: real server launcher in Windows PowerShell with mocked executable; no model loaded");
+    logs.Clear();
+    var absoluteHarness = File.ReadAllText(harness).Replace("-ModelPath model.gguf -MmprojPath mmproj.gguf -ServerExe 'fake server.cmd'",
+        "-ModelPath (Join-Path $PSScriptRoot 'model.gguf') -MmprojPath (Join-Path $PSScriptRoot 'mmproj.gguf') -ServerExe (Join-Path $PSScriptRoot 'fake server.cmd')");
+    File.WriteAllText(harness, absoluteHarness, new System.Text.UTF8Encoding(true));
+    runner.Start("absolute-launcher", ProcessRunner.PowerShell, root, ProcessRunner.ScriptArguments(harness, new Dictionary<string, string?>()));
+    await Wait(() => logs.Any(s => s.Contains("[absolute-launcher] 終了コード")));
+    Assert(logs.Any(s => s.Contains("MOCK-SERVER-OK") && s.Contains(Path.Combine(root, "model.gguf"))) && logs.Any(s => s.Contains("[absolute-launcher] 終了コード 0")), "Absolute asset paths must reach the server without joining the repository prefix");
+    Console.WriteLine("PASS: absolute model, mmproj and executable paths; no model loaded");
+
 
     logs.Clear();
     runner.Start("exit", ProcessRunner.PowerShell, root, new[] { "-NoProfile", "-Command", "[Console]::Error.WriteLine('intentional error'); exit 7" });

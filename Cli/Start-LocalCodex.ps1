@@ -22,6 +22,8 @@ $Capture = $Capture -or $env:LOCAL_CODEX_CAPTURE -eq '1'
 Remove-Item Env:LOCAL_CODEX_CHILD -ErrorAction SilentlyContinue
 Remove-Item Env:LOCAL_CODEX_CAPTURE -ErrorAction SilentlyContinue
 
+. (Join-Path $PSScriptRoot 'Initialize-CliEnvironment.ps1')
+
 # llama-server exposes the OpenAI-compatible Responses API at
 # /v1/responses (codex 0.157+ no longer accepts wire_api = "chat"). The local
 # normalization proxy rewrites Codex's system prompt the same way the Claude
@@ -158,7 +160,8 @@ if ($CodexArgs.Count -eq 0 -and -not $ChildInteractive -and ([Console]::IsInputR
     Start-Process -FilePath $shellExe -WorkingDirectory (Get-Location).Path -ArgumentList @('-NoExit', '-File', $PSCommandPath)
     exit 0
 }
-if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
+$codexCommand = Get-Command codex -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $codexCommand) {
     Write-Error 'codex コマンドが見つかりません。OpenAI Codex CLI をインストールし、PATH に追加してください。'
     exit 1
 }
@@ -230,9 +233,9 @@ $codexInvocation = @(
 
 Write-Host "Codex CLI -> ${apiBaseUrl}/v1 (model: $localModel; context: $serverContextTokens; effort: $reasoningEffort)" -ForegroundColor Cyan
 if ($userInvocation.Count -eq 0) {
-    & codex @codexInvocation
+    & $codexCommand.Source @codexInvocation
 }
 else {
-    & codex 'exec' @codexInvocation
+    & $codexCommand.Source 'exec' @codexInvocation
 }
 exit $LASTEXITCODE

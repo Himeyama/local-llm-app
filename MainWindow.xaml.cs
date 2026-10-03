@@ -24,8 +24,7 @@ public sealed partial class MainWindow : Window
     private string page = "server";
     private int loadedPort;
     private Task? browserInitialization;
-    private Button? serverStopButton;
-    private Button? serverSettingsButton;
+    private Action? saveServerSettings;
     private TextBox[] serverLaunchInputs = Array.Empty<TextBox>();
     private Button[] cliButtons = Array.Empty<Button>();
     private bool ServerActive => serverStatus.IsConnected || serverStatus.IsStarting || runner.IsRunning("llama-server");
@@ -171,8 +170,8 @@ public sealed partial class MainWindow : Window
     }
     private void BuildPage()
     {
-        serverStopButton = null;
-        serverSettingsButton = null;
+        saveServerSettings = null;
+        ServerCommandBar.Visibility = page == "server" ? Visibility.Visible : Visibility.Collapsed;
         serverLaunchInputs = Array.Empty<TextBox>();
         cliButtons = Array.Empty<Button>();
         Form.Children.Clear();
@@ -187,44 +186,44 @@ public sealed partial class MainWindow : Window
                 var context = Number("コンテキスト長", settings.ContextSize, 65536, 1000000);
                 var threads = Number("CPU スレッド", settings.Threads, 1, 512);
                 var mtp = Number("MTP draft tokens（無効: 0）", settings.MtpDraftTokens, 0, 16);
-                var model = Input("モデルの相対パス", Settings.DefaultModelPath);
-                var mmproj = Input("対応する mmproj の相対パス", Settings.DefaultMmprojPath);
-                var exe = Input("llama-server.exe の相対パス", Settings.DefaultServerExe);
+                var model = Input("モデルの絶対パス", AssetPath(settings.ModelPath, Settings.DefaultModelPath));
+                var mmproj = Input("対応する mmproj の絶対パス", AssetPath(settings.MmprojPath, Settings.DefaultMmprojPath));
+                var exe = Input("llama-server.exe の絶対パス", AssetPath(settings.ServerExe, Settings.DefaultServerExe));
                 serverLaunchInputs = new[] { model, mmproj, exe };
-                serverSettingsButton = Button("この設定で起動", () => {
-                    var saveOnly = ServerActive;
-                    var args = new Dictionary<string, string?>();
-                    if (!saveOnly) {
-                        if (!string.IsNullOrWhiteSpace(model.Text)) { RequireRelative(model.Text); args["ModelPath"] = model.Text; }
-                        if (!string.IsNullOrWhiteSpace(mmproj.Text)) { RequireRelative(mmproj.Text); args["MmprojPath"] = mmproj.Text; }
-                        if (!string.IsNullOrWhiteSpace(exe.Text)) { RequireRelative(exe.Text); args["ServerExe"] = exe.Text; }
-                    }
-                    settings.ContextSize = Read(context); settings.Threads = Read(threads); settings.MtpDraftTokens = Read(mtp); settings.Save();
-                    if (!saveOnly) StartServer(args);
-                });
-                UpdateServerSettingsButton();
-                serverStopButton = Button("llama-server を終了", () => runner.Stop("llama-server"));
-                UpdateServerStopButton();
+                saveServerSettings = () => {
+                    var contextValue = Read(context); var threadsValue = Read(threads); var mtpValue = Read(mtp);
+                    var modelPath = AssetPath(model.Text, Settings.DefaultModelPath);
+                    var mmprojPath = AssetPath(mmproj.Text, Settings.DefaultMmprojPath);
+                    var serverExe = AssetPath(exe.Text, Settings.DefaultServerExe);
+                    settings.ContextSize = contextValue; settings.Threads = threadsValue; settings.MtpDraftTokens = mtpValue;
+                    settings.ModelPath = modelPath; settings.MmprojPath = mmprojPath; settings.ServerExe = serverExe;
+                    settings.Save();
+                    model.Text = modelPath; mmproj.Text = mmprojPath; exe.Text = serverExe;
+                };
+                UpdateServerControls();
                 break;
             case "cli":
+                var workingDirectory = Input("作業ディレクトリ", string.IsNullOrWhiteSpace(settings.CliWorkingDirectory) ? settings.RepositoryRoot : settings.CliWorkingDirectory);
+                Button("フォルダーを選択", () => _ = PickCliDirectoryAsync(workingDirectory));
                 var capture = new CheckBox { Content = "mitmweb で通信をキャプチャー" }; Form.Children.Add(capture);
                 cliButtons = new[] {
-                    Button("Claude Code を開く", () => OpenCli("Start-LocalClaude.ps1", capture.IsChecked == true)),
-                    Button("Codex CLI を開く", () => OpenCli("Start-LocalCodex.ps1", capture.IsChecked == true))
+                    Button("Claude Code を開く", () => OpenCli("Start-LocalClaude.ps1", capture.IsChecked == true, workingDirectory.Text)),
+                    Button("Codex CLI を開く", () => OpenCli("Start-LocalCodex.ps1", capture.IsChecked == true, workingDirectory.Text))
                 };
                 foreach (var button in cliButtons) button.IsEnabled = serverStatus.IsConnected;
                 break;
             case "logs": LogView.Text = string.Join(Environment.NewLine, logs); break;
         }
     }
-    private static void RequireRelative(string path)
-    {
-        if (Path.IsPathRooted(path) || path.Split('/', '\\').Contains("..")) throw new ArgumentException("リポジトリ内の相対パスを指定してください。");
-    }
-    private void UpdateServerStopButton()
-    {
-        if (serverStopButton != null) serverStopButton.IsEnabled = runner.IsRunning("llama-server");
-    }
+    private string AssetPath(string path, string defaultPath) => Path.GetFullPath(
+        Environment.ExpandEnvironmentVariables(string.IsNullOrWhiteSpace(path) ? defaultPath : path.Trim()), settings.RepositoryRoot);
+    private void OnSaveServerSettings(object sender, RoutedEventArgs e) => Execute(() => saveServerSettings?.Invoke());
+    private void OnToggleServer(object sender, RoutedEventArgs e) => Execute(() => {
+        if (runner.IsRunning("llama-server")) { runner.Stop("llama-server"); return; }
+        if (ServerActive || saveServerSettings == null) return;
+        saveServerSettings();
+        StartServer(new() { ["ModelPath"] = settings.ModelPath, ["MmprojPath"] = settings.MmprojPath, ["ServerExe"] = settings.ServerExe });
+    });
     private void StartServer(Dictionary<string, string?> args)
     {
         if (serverStatus.IsStarting || runner.IsRunning("llama-server")) return;
@@ -236,19 +235,22 @@ public sealed partial class MainWindow : Window
         try { StartScript("llama-server", "Start-LlamaServer.ps1", args); }
         catch { serverStatus.Failed(); UpdateStatus(); throw; }
     }
-    private void UpdateServerSettingsButton()
+    private void UpdateServerControls()
     {
-        if (serverSettingsButton == null) return;
         var active = ServerActive;
-        ((TextBlock)serverSettingsButton.Content).Text = active
-            ? "数値設定を保存（次回起動時に反映）" : "この設定で起動";
+        ServerStartButton.Label = active ? "llama-server を終了" : "llama-server を起動";
+        var symbol = active ? Symbol.Stop : Symbol.Play;
+        if (ServerStartButton.Icon is SymbolIcon icon && icon.Symbol != symbol) icon.Symbol = symbol;
+        ServerStartButton.IsEnabled = !active || runner.IsRunning("llama-server");
+        ToolTipService.SetToolTip(ServerStartButton, active && !runner.IsRunning("llama-server")
+            ? "このアプリで起動したサーバーだけ終了できます。" : null);
+        ToolTipService.SetToolTip(ServerSaveButton, active ? "保存した設定は次回起動時に反映されます。" : "設定を保存します。");
         foreach (var input in serverLaunchInputs) input.IsEnabled = !active;
     }
     private void UpdateStatus()
     {
         if (closing) return;
-        UpdateServerStopButton();
-        UpdateServerSettingsButton();
+        UpdateServerControls();
         foreach (var button in cliButtons) button.IsEnabled = serverStatus.IsConnected;
         UpdateWebControls();
         Status.Text = $"{serverStatus.Spinner}llama-server: {serverStatus.Message}    |    {webStatus.Spinner}Open WebUI: {webStatus.Message}";
@@ -275,7 +277,21 @@ public sealed partial class MainWindow : Window
         try { StartScript("Open WebUI", "Start-OpenWebUI.ps1", new() { ["Port"] = settings.WebPort.ToString(CultureInfo.InvariantCulture) }); }
         catch { webStatus.Failed(); UpdateStatus(); throw; }
     }
-    private void OpenCli(string script, bool capture)
+    private async Task PickCliDirectoryAsync(TextBox input)
+    {
+        try {
+            var picker = new Windows.Storage.Pickers.FolderPicker { SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.ComputerFolder };
+            picker.FileTypeFilter.Add("*");
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder != null && !closing) {
+                input.Text = folder.Path;
+                settings.CliWorkingDirectory = folder.Path;
+                settings.Save();
+            }
+        } catch (Exception e) { if (!closing) ShowError("フォルダーを選択できません: " + e.Message); }
+    }
+    private void OpenCli(string script, bool capture, string directory)
     {
         if (!serverStatus.IsConnected) return;
         // CLI launchers and their proxy dependencies are shipped with this GUI.
@@ -283,9 +299,17 @@ public sealed partial class MainWindow : Window
         if (script is not ("Start-LocalClaude.ps1" or "Start-LocalCodex.ps1")) throw new ArgumentException("未対応の CLI です。");
         var localScript = Path.Combine(AppContext.BaseDirectory, "Cli", script);
         if (!File.Exists(localScript)) throw new FileNotFoundException("同梱の CLI 起動スクリプトが見つかりません。GUI を再ビルドしてください。", localScript);
-        var info = new ProcessStartInfo(ProcessRunner.PowerShell) { WorkingDirectory = settings.RepositoryRoot, UseShellExecute = true };
+        var workingDirectory = Path.GetFullPath(Environment.ExpandEnvironmentVariables(
+            string.IsNullOrWhiteSpace(directory) ? settings.RepositoryRoot : directory.Trim()), settings.RepositoryRoot);
+        if (!Directory.Exists(workingDirectory)) throw new DirectoryNotFoundException("作業ディレクトリが見つかりません: " + workingDirectory);
+        settings.CliWorkingDirectory = workingDirectory;
+        settings.Save();
+        var terminalAlias = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "wt.exe");
+        var info = new ProcessStartInfo(File.Exists(terminalAlias) ? terminalAlias : "wt.exe") { WorkingDirectory = workingDirectory, UseShellExecute = true };
+        foreach (var arg in new[] { "-w", "new", "new-tab", "--title", script == "Start-LocalClaude.ps1" ? "Claude Code" : "Codex CLI", "--startingDirectory", workingDirectory, ProcessRunner.PowerShell }) info.ArgumentList.Add(arg);
         foreach (var arg in new[] { "-NoProfile", "-NoExit", "-ExecutionPolicy", "Bypass", "-EncodedCommand", ProcessRunner.EncodedScript(localScript, capture ? new Dictionary<string, string?> { ["Capture"] = null } : new()) }) info.ArgumentList.Add(arg);
-        Process.Start(info)?.Dispose();
+        try { Process.Start(info)?.Dispose(); }
+        catch (System.ComponentModel.Win32Exception e) { throw new InvalidOperationException("Windows Terminal を開けません。インストールと wt.exe の実行エイリアスを確認してください。", e); }
     }
     private Task EnsureBrowserAsync() => !webStatus.IsConnected ? Task.CompletedTask : browserInitialization ??= InitializeBrowserAsync();
     private async Task InitializeBrowserAsync()
