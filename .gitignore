@@ -1,0 +1,17 @@
+bin/
+obj/
+.vs/
+publish/
+*.user
+*.log
+*.gguf
+*.mp4
+models/
+wan_models/
+.venv/
+.venv-screenshot/
+.uv-cache/
+
+runtime/
+openwebui/
+__pycache__/

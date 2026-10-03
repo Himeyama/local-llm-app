@@ -1,0 +1,38 @@
+<Window x:Class="LocalLlm.Gui.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Grid x:Name="RootLayout" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <TitleBar x:Name="AppTitleBar" Title="Local LLM" Subtitle="ローカル AI ワークスペース"
+              IsPaneToggleButtonVisible="True" PaneToggleRequested="OnPaneToggleRequested">
+      <TitleBar.IconSource><FontIconSource Glyph="&#xE8F1;"/></TitleBar.IconSource>
+    </TitleBar>
+    <NavigationView x:Name="Navigation" Grid.Row="1" PaneDisplayMode="Auto" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" IsPaneToggleButtonVisible="False" IsTitleBarAutoPaddingEnabled="False" SelectionChanged="OnSelectionChanged" OpenPaneLength="230">
+      <NavigationView.PaneHeader><StackPanel Margin="16,20,0,20"><TextBlock Text="LOCAL LLM" FontSize="22" FontWeight="SemiBold"/><TextBlock Text="ローカル AI ワークスペース" Opacity="0.6" Margin="0,6,0,0"/></StackPanel></NavigationView.PaneHeader>
+      <NavigationView.MenuItems>
+        <NavigationViewItem Content="llama-server" Tag="server" Icon="Setting" IsSelected="True"/>
+        <NavigationViewItem Content="Open WebUI" Tag="web" Icon="Globe"/>
+        <NavigationViewItem Content="Claude / Codex" Tag="cli" Icon="Message"/>
+        <NavigationViewItem Content="ログ" Tag="logs" Icon="Document"/>
+      </NavigationView.MenuItems>
+      <Grid Padding="28,20,28,20" RowSpacing="16">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <StackPanel><TextBlock x:Name="PageTitle" Text="llama-server" FontSize="28" FontWeight="SemiBold"/><TextBlock x:Name="Status" Text="接続状態を確認しています…" Opacity="0.7" Margin="0,8,0,0" TextWrapping="Wrap"/></StackPanel>
+        <InfoBar x:Name="Notice" Grid.Row="1" IsOpen="False" IsClosable="True"/>
+        <Grid Grid.Row="2">
+          <ScrollViewer x:Name="FormScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" SizeChanged="OnFormSizeChanged">
+            <StackPanel x:Name="Form" Spacing="16" HorizontalAlignment="Left" Margin="0,0,0,16"/>
+          </ScrollViewer>
+          <Grid x:Name="WebPanel" Visibility="Collapsed" RowSpacing="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <CommandBar DefaultLabelPosition="Right" IsDynamicOverflowEnabled="True" Background="Transparent">
+              <AppBarButton x:Name="StartWebButton" IsEnabled="False" Label="Open WebUI を起動" Icon="Play" Click="OnStartWeb"/>
+              <AppBarButton x:Name="StopWebButton" IsEnabled="False" Label="停止" Icon="Stop" Click="OnStopWeb"/>
+              <AppBarButton x:Name="ReloadWebButton" IsEnabled="False" Label="再読み込み" Icon="Refresh" Click="OnReloadWeb"/>
+              <AppBarButton x:Name="ExternalWebButton" IsEnabled="False" Label="外部ブラウザー" Icon="Globe" Click="OnExternalWeb"/>
+            </CommandBar>
+            <WebView2 x:Name="Browser" Grid.Row="1" Visibility="Collapsed"/>
+          </Grid>
+          <TextBox x:Name="LogView" Visibility="Collapsed" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Code, Noto Sans JP"/>
+        </Grid>
+      </Grid>
+    </NavigationView>
+  </Grid>
+</Window>
