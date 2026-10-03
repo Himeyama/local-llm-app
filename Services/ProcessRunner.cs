@@ -6,9 +6,10 @@ namespace LocalLlm.Gui.Services;
 public sealed class ProcessRunner : IDisposable
 {
     private readonly Dictionary<string, Process> processes = new();
+    private readonly HashSet<Process> requestedStops = new();
     private readonly object gate = new();
     public event Action<string>? Log;
-    public event Action<string, int>? Exited;
+    public event Action<string, int, bool>? Exited;
     public bool IsRunning(string name)
     {
         lock (gate) return processes.TryGetValue(name, out var p) && !p.HasExited;
@@ -38,16 +39,26 @@ public sealed class ProcessRunner : IDisposable
     }
     private async Task ObserveAsync(string name, Process p)
     {
-        try { await p.WaitForExitAsync(); Log?.Invoke($"[{name}] 終了コード {p.ExitCode}"); Exited?.Invoke(name, p.ExitCode); }
+        try
+        {
+            await p.WaitForExitAsync();
+            bool stopRequested;
+            lock (gate) stopRequested = requestedStops.Contains(p);
+            Log?.Invoke($"[{name}] 終了コード {p.ExitCode}");
+            Exited?.Invoke(name, p.ExitCode, stopRequested);
+        }
         catch (Exception e) { Log?.Invoke($"[{name}] {e.Message}"); }
-        finally { lock (gate) { processes.Remove(name); p.Dispose(); } }
+        finally { lock (gate) { processes.Remove(name); requestedStops.Remove(p); p.Dispose(); } }
     }
     public void Stop(string name)
     {
         lock (gate)
             if (processes.TryGetValue(name, out var p) && !p.HasExited)
             {
-                p.Kill(entireProcessTree: true);
+                // Record intent before killing: exit observation may run immediately.
+                requestedStops.Add(p);
+                try { p.Kill(entireProcessTree: true); }
+                catch { requestedStops.Remove(p); throw; }
                 Log?.Invoke($"[{name}] 子プロセスを含めて停止しました。");
             }
     }

@@ -43,13 +43,13 @@ public sealed partial class MainWindow : Window
             if (message.StartsWith("[llama-server] ", StringComparison.Ordinal)) { serverStatus.ObserveLog(message); UpdateStatus(); }
             if (message.StartsWith("[Open WebUI] ", StringComparison.Ordinal)) { webStatus.ObserveLog(message); UpdateStatus(); }
         });
-        runner.Exited += (name, code) => DispatcherQueue.TryEnqueue(() => {
+        runner.Exited += (name, code, stopRequested) => DispatcherQueue.TryEnqueue(() => {
             if (closing) return;
-            if (name == "llama-server") serverStatus.Finish(code);
-            else if (name == "Open WebUI") { webStatus.Finish(code); loadedPort = 0; }
+            if (name == "llama-server") serverStatus.Finish(code, stopRequested);
+            else if (name == "Open WebUI") { webStatus.Finish(code, stopRequested); loadedPort = 0; }
             else return;
             UpdateStatus();
-            if (code != 0) ShowError($"{name} が終了しました（コード {code}）。ログを確認してください。");
+            if (code != 0 && !stopRequested) ShowError($"{name} が終了しました（コード {code}）。ログを確認してください。");
         });
         timer.Tick += async (_, _) => await RefreshStatusAsync();
         spinnerTimer.Tick += (_, _) => { serverStatus.Tick(); webStatus.Tick(); UpdateStatus(); };

@@ -45,6 +45,8 @@ startup.Begin(); startup.Failed();
 Assert(!startup.IsStarting && startup.Message.Contains("失敗"), "Launch exception must stop spinner");
 startup.Begin(); startup.Finish(0);
 Assert(!startup.IsStarting && startup.Message.Contains("停止"), "Stopped process must stop spinner");
+startup.Begin(); startup.Finish(-1, stopRequested: true);
+Assert(!startup.IsStarting && !startup.IsConnected && startup.Spinner == "" && startup.Message == "未接続", "Requested server stop must not show an exit error");
 Console.WriteLine("PASS: startup spinner, loading phases, delayed logs, readiness, failure and stop");
 
 var webStartup = new WebStartupStatus();
@@ -75,6 +77,8 @@ webStartup.Begin(); webStartup.Failed();
 Assert(!webStartup.IsStarting && webStartup.Message.Contains("失敗"), "Web launch exception must stop spinner");
 webStartup.Begin(); webStartup.Finish(0);
 Assert(!webStartup.IsStarting && webStartup.Message.Contains("停止"), "Web stop must stop spinner");
+webStartup.Begin(); webStartup.Finish(-1, stopRequested: true);
+Assert(!webStartup.IsStarting && !webStartup.IsConnected && webStartup.Message == "未接続", "Requested WebUI stop must not show an exit error");
 Console.WriteLine("PASS: WebUI spinner, startup phases, readiness, disconnect, failure and stop");
 
 var root = Path.Combine(Path.GetTempPath(), "LocalLlmGui-tests-" + Guid.NewGuid());
@@ -87,6 +91,8 @@ try
     File.WriteAllText(script, "param([int]$ContextSize,[string]$ModelPath,[switch]$Capture)\n[IO.File]::WriteAllText('" + result.Replace("'", "''") + "', \"$ContextSize|$ModelPath|$Capture\")");
     using var runner = new ProcessRunner();
     var logs = new ConcurrentQueue<string>(); runner.Log += logs.Enqueue;
+    var exits = new ConcurrentQueue<(string Name, int Code, bool StopRequested)>();
+    runner.Exited += (name, code, stopRequested) => exits.Enqueue((name, code, stopRequested));
     runner.Start("args", ProcessRunner.PowerShell, root, ProcessRunner.ScriptArguments(script, new Dictionary<string, string?> { ["ContextSize"] = "131072", ["ModelPath"] = tricky, ["Capture"] = null }));
     await Wait(() => logs.Any(s => s.Contains("[args] 終了コード")));
     Assert(File.ReadAllText(result) == "131072|" + tricky + "|True", "PowerShell named parameter / quoting regression");
@@ -143,6 +149,8 @@ try
     runner.Start("exit", ProcessRunner.PowerShell, root, new[] { "-NoProfile", "-Command", "[Console]::Error.WriteLine('intentional error'); exit 7" });
     await Wait(() => logs.Any(s => s.Contains("[exit] 終了コード")));
     Assert(logs.Any(s => s.Contains("intentional error")) && logs.Any(s => s.Contains("終了コード 7")), "stderr / nonzero exit missing");
+    await Wait(() => exits.Any(e => e.Name == "exit"));
+    Assert(exits.Any(e => e.Name == "exit" && e.Code == 7 && !e.StopRequested), "Unexpected failure must remain distinguishable from a requested stop");
     Console.WriteLine("PASS: stderr and nonzero exit reporting");
 
     var childPid = Path.Combine(root, "child.txt");
@@ -157,6 +165,8 @@ try
     runner.Stop("tree");
     await Wait(() => child.HasExited);
     await Wait(() => !runner.IsRunning("tree"));
+    await Wait(() => exits.Any(e => e.Name == "tree"));
+    Assert(exits.Any(e => e.Name == "tree" && e.StopRequested), "Process tree kill must be reported as a requested stop");
     child.Dispose();
     Console.WriteLine("PASS: duplicate prevention and owned process tree shutdown");
 }

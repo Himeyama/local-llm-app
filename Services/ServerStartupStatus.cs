@@ -37,10 +37,10 @@ internal sealed class ServerStartupStatus
         if (connected) { IsStarting = false; Message = "接続済み" + (model.Length > 0 ? " · " + model : ""); }
         else if (!IsStarting) Message = "未接続";
     }
-    public void Finish(int exitCode)
+    public void Finish(int exitCode, bool stopRequested = false)
     {
         IsStarting = false; IsConnected = false;
-        Message = exitCode == 0 ? "停止しました" : $"終了しました（コード {exitCode}）";
+        Message = stopRequested ? "未接続" : exitCode == 0 ? "停止しました" : $"終了しました（コード {exitCode}）";
     }
     public void Failed() { IsStarting = false; IsConnected = false; Message = "起動に失敗しました"; }
 }
