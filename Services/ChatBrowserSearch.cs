@@ -36,9 +36,9 @@ public static class ChatBrowserSearch
             var result = await output; var detail = await error;
             if (process.ExitCode != 0) throw new IOException("Playwright MCP 検索に失敗しました: " + detail[..Math.Min(detail.Length, 2000)]);
             var data = JsonNode.Parse(result) ?? throw new IOException("検索結果が空です。");
-            var text = new StringBuilder("Source: " + data["source"]?.GetValue<string>() + "\n");
+            var text = new StringBuilder("検索語: " + data["query"]?.GetValue<string>() + "\nSource: " + data["source"]?.GetValue<string>() + "\n取得日時: " + data["retrievedAt"]?.GetValue<string>() + "\n以下は検索ページ上の見出しと抜粋です。リンク先の本文は未確認です。\n");
             foreach (var row in data["results"]!.AsArray())
-                text.AppendLine(row!["title"]?.GetValue<string>()).AppendLine(row["url"]?.GetValue<string>()).AppendLine(row["snippet"]?.GetValue<string>()).AppendLine();
+                text.AppendLine(row!.ToJsonString());
             return text.ToString();
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { throw new IOException("Playwright MCP 検索がタイムアウトしました。"); }

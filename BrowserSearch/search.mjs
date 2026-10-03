@@ -28,12 +28,7 @@ export function normalizeResults(rows) {
   const seen = new Set();
   return rows.flatMap(row => {
     try {
-      let url = new URL(row.url);
-      if (url.hostname.endsWith('bing.com') && url.pathname === '/ck/a') {
-        const encoded = url.searchParams.get('u');
-        if (!encoded?.startsWith('a1')) return [];
-        url = new URL(Buffer.from(encoded.slice(2), 'base64url').toString('utf8'));
-      }
+      const url = new URL(row.url);
       if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || !row.title?.trim() || seen.has(url.href)) return [];
       seen.add(url.href);
       return [{ title: row.title.trim().slice(0, 300), url: url.href, snippet: (row.snippet ?? '').trim().slice(0, 1000) }];
@@ -41,26 +36,60 @@ export function normalizeResults(rows) {
   }).slice(0, 8);
 }
 
+export function validateSearchPage(page, query) {
+  const normalize = text => typeof text === 'string' ? text.trim().replace(/\s+/gu, ' ') : '';
+  let url;
+  try { url = new URL(page.source); } catch { throw new Error('検索ページの URL を確認できません。'); }
+  if (url.origin !== 'https://search.yahoo.co.jp' || url.pathname !== '/search' || normalize(url.searchParams.get('p')) !== normalize(query) || normalize(page.query) !== normalize(query))
+    throw new Error('要求した検索語と実際の検索ページが一致しないため、結果を返しません。');
+  if (!Array.isArray(page.rows)) throw new Error('検索結果の形式が不正です。');
+  if (page.noResults) throw new Error('指定された検索語に一致する検索結果はありません。検索語を勝手に変更せず、別の語句を指定してください。');
+  const results = normalizeResults(page.rows);
+  if (!results.length) throw new Error('表示中の通常のウェブ検索結果を取得できませんでした。結果カードがない、または検索サービスの制限・確認画面の可能性があります。');
+  // Enforce an unambiguous, positive site: restriction even if the provider
+  // silently broadens the query. Other search operators stay with the provider.
+  const sites = [...query.matchAll(/(?:^|\s)site:([\w.-]+)(?=\s|$)/gi)].map(m => m[1].toLowerCase());
+  if (sites.length === 1 && results.some(row => {
+    const host = new URL(row.url).hostname.toLowerCase();
+    return host !== sites[0] && !host.endsWith('.' + sites[0]);
+  })) throw new Error('検索結果が site: の条件に一致しないため、結果を返しません。');
+  return { query: query.trim(), source: url.href, retrievedAt: new Date().toISOString(), results };
+}
+
 export async function search(query, client) {
   if (typeof query !== 'string' || !query.trim() || query.length > 2000) throw new Error('検索語を 1～2,000 文字で指定してください。');
-  const source = 'https://www.bing.com/search?q=' + encodeURIComponent(query.trim());
+  const source = 'https://search.yahoo.co.jp/search?' + new URLSearchParams({ p: query.trim(), ei: 'UTF-8' });
   const navigation = await client.callTool({ name: 'browser_navigate', arguments: { url: source } });
   if (navigation.isError) throw new Error(navigation.content?.map(c => c.text ?? '').join('\n') || '検索ページを開けません。');
   // Fixed DOM code only: neither model output nor the query is evaluated as JS.
   const result = await client.callTool({ name: 'browser_evaluate', arguments: { function: `async () => {
-    const deadline = Date.now() + 8000;
-    while (!document.querySelector('#b_results li.b_algo h2 a') && Date.now() < deadline)
-      await new Promise(resolve => setTimeout(resolve, 200));
-    return Array.from(document.querySelectorAll('#b_results li.b_algo')).slice(0, 12).map(item => {
-      const link = item.querySelector('h2 a');
-      return { title: link?.textContent ?? '', url: link?.href ?? '', snippet: item.querySelector('.b_caption p, p')?.textContent ?? '' };
+    const visible = element => element && element.getClientRects().length > 0 &&
+      element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && !element.closest('[aria-hidden="true"]');
+    const clean = text => (text ?? '').replace(/\\s+/gu, ' ').trim();
+    const snapshot = () => ({
+      source: location.href,
+      query: document.querySelector('input[name="p"]')?.value ?? '',
+      noResults: /一致する情報は見つかりませんでした/.test(document.body.innerText),
+      rows: Array.from(document.querySelectorAll('.Algo')).filter(visible).flatMap(item => {
+        const link = item.querySelector('a.sw-Card__titleInner[href]');
+        const title = link?.querySelector('h3');
+        if (!visible(link) || !visible(title)) return [];
+        const snippet = item.querySelector('.sw-Card__summary');
+        return [{ title: clean(title.innerText), url: link.href, snippet: visible(snippet) ? clean(snippet.innerText) : '' }];
+      }).slice(0, 12)
     });
+    const deadline = Date.now() + 8000;
+    let page, previous = '', stableSince = Date.now();
+    do {
+      page = snapshot();
+      const fingerprint = JSON.stringify(page);
+      if (fingerprint !== previous) { previous = fingerprint; stableSince = Date.now(); }
+      if ((page.rows.length || page.noResults) && Date.now() - stableSince >= 400) return page;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    } while (Date.now() < deadline);
+    return snapshot();
   }` } });
-  const rows = resultValue(result);
-  if (!Array.isArray(rows)) throw new Error('検索結果の形式が不正です。');
-  const results = normalizeResults(rows);
-  if (!results.length) throw new Error('検索結果を取得できませんでした。検索サービスの制限・確認画面または検索結果なしの可能性があります。');
-  return { source, results };
+  return validateSearchPage(resultValue(result), query);
 }
 
 export async function withBrowser(action, contextGetter) {
@@ -92,6 +121,7 @@ export async function withBrowser(action, contextGetter) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     let input = '';
+    process.stdin.setEncoding('utf8');
     for await (const chunk of process.stdin) {
       input += chunk;
       if (input.length > 16000) throw new Error('検索入力が大きすぎます。');
