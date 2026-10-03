@@ -10,6 +10,8 @@ public sealed class ChatSession
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
     public string Workspace { get; set; } = "";
     public List<JsonObject> Messages { get; set; } = new();
+    public int? ContextTokens { get; set; }
+    public string Summary { get; set; } = "";
     public override string ToString() => Title;
 }
 

@@ -12,6 +12,17 @@ static async Task Reject(Func<Task> action, string message)
 static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
 static string Chunk(JsonObject delta, string? finish = null) => "data: " + new JsonObject { ["choices"] = new JsonArray { new JsonObject { ["delta"] = delta, ["finish_reason"] = finish } } }.ToJsonString() + "\n\n";
 static string Call(int index, string? id, string? name, string fragment) => Chunk(new JsonObject { ["tool_calls"] = new JsonArray { new JsonObject { ["index"] = index, ["id"] = id, ["function"] = new JsonObject { ["name"] = name, ["arguments"] = fragment } } } });
+static string Usage(int prompt, int completion) => "data: " + new JsonObject { ["choices"] = new JsonArray(), ["usage"] = new JsonObject { ["prompt_tokens"] = prompt, ["completion_tokens"] = completion, ["total_tokens"] = prompt + completion, ["prompt_tokens_details"] = new JsonObject { ["cached_tokens"] = prompt / 2 } } }.ToJsonString() + "\n\n";
+
+Assert(ChatContextUsage.Maximum(Args("{\"default_generation_settings\":{\"n_ctx\":32768},\"total_slots\":4}")) == 32768, "Maximum must use per-slot server context");
+Assert(ChatContextUsage.Maximum(Args("{\"default_generation_settings\":{\"n_ctx\":0}}")) == null, "Invalid maximum context accepted");
+Assert(ChatContextUsage.Maximum(Args("{}")) == null, "Unavailable maximum must remain unknown");
+Assert(ChatContextUsage.Total(Args("{\"prompt_tokens\":90,\"completion_tokens\":10}")) == 100, "Split token usage not summed");
+Assert(ChatContextUsage.Total(Args("{\"total_tokens\":-1}")) == null, "Negative token usage accepted");
+Assert(ChatContextUsage.Total(Args("{\"prompt_tokens\":2147483647,\"completion_tokens\":1}")) == null, "Overflow token usage accepted");
+Assert(new[] { "none", "low", "medium", "xhigh" }.Select(ChatContextUsage.ReasoningLabel).SequenceEqual(new[] { "オフ", "低", "中", "最高" }), "Reasoning labels incorrect");
+Assert(ChatCommands.Parse(" /clear ") == "clear" && ChatCommands.Parse("/compress") == "compress" && ChatCommands.Parse("/compact") == "compress", "Chat command aliases incorrect");
+Assert(ChatCommands.Parse("/clear something") == null && ChatCommands.Parse("通常の会話") == null, "Ordinary messages interpreted as commands");
 
 var root = Path.Combine(Path.GetTempPath(), "LocalLlmChat-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
@@ -67,8 +78,8 @@ try
     Console.WriteLine("PASS: session deletion persists and preserves other histories, invalid ID rejected");
 
     var handler = new MockHandler();
-    handler.Responses.Enqueue(Call(0, "call_1", "read_file", "{\"path\":") + Call(0, null, null, "\"notes/a.txt\"}") + Chunk(new(), "tool_calls") + "data: [DONE]\n\n");
-    handler.Responses.Enqueue(Chunk(new() { ["content"] = "日本語" }) + Chunk(new() { ["content"] = "の回答" }, "stop") + "data: [DONE]\n\n");
+    handler.Responses.Enqueue(Call(0, "call_1", "read_file", "{\"path\":") + Call(0, null, null, "\"notes/a.txt\"}") + Chunk(new(), "tool_calls") + Usage(100, 20) + "data: [DONE]\n\n");
+    handler.Responses.Enqueue(Chunk(new() { ["content"] = "日本語" }) + Chunk(new() { ["content"] = "の回答" }, "stop") + Usage(250, 30) + "data: [DONE]\n\n");
     using var client = new HttpClient(handler);
     int saves = 0;
     await new ChatClient(client).GenerateAsync(session, readonlyTools, new SilentProgress(), () => { saves++; store.Save(session); }, default, "low");
@@ -77,6 +88,9 @@ try
     Assert(session.Messages[3]["content"]!.GetValue<string>() == "日本語の回答", "Stream assembly failed");
     Assert(handler.Requests.All(r => r["model"]!.GetValue<string>() == "server-model"), "Model ID must come from props");
     Assert(handler.Requests.All(r => r["reasoning_effort"]!.GetValue<string>() == "low"), "Reasoning level must reach every model/tool turn");
+    Assert(handler.Requests.All(r => r["stream_options"]!["include_usage"]!.GetValue<bool>()), "Streaming usage must be requested for every round");
+    Assert(session.ContextTokens == 280 && store.Load().Single().ContextTokens == 280, "Latest usage must include cached tokens, replace previous tool-round usage, and persist");
+    Console.WriteLine("PASS: context limit, usage-only SSE chunks, latest-round token totals, persistence and reasoning labels");
     Assert(handler.Requests[1]["messages"]!.AsArray().Any(m => m?["tool_call_id"]?.GetValue<string>() == "call_1"), "Tool result not sent to model");
     Assert(handler.Requests[0]["messages"]![1]!["content"]![1]!["image_url"]!["url"]!.GetValue<string>().StartsWith("data:image/png"), "Image not sent to model");
     Console.WriteLine("PASS: props model discovery, image payload, fragmented SSE tool calls, execution and next-turn tool results, final streamed reply");
@@ -91,10 +105,41 @@ try
     handler.Responses.Enqueue(Call(0, "failed", "read_file", "{\"path\":\"../no\"}") + Chunk(new(), "tool_calls") + "data: [DONE]\n\n");
     handler.Responses.Enqueue(Chunk(new() { ["content"] = "失敗しました" }, "stop") + "data: [DONE]\n\n");
     await new ChatClient(client).GenerateAsync(interrupted, readonlyTools, new SilentProgress(), () => { }, default);
+    Assert(interrupted.ContextTokens == null, "Missing usage must remain unknown");
     Assert(interrupted.Messages[2]["content"]!.GetValue<string>().Contains("ツール失敗"), "Tool failure not returned to model");
     using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
     try { await new ChatClient(client).GenerateAsync(interrupted, readonlyTools, new SilentProgress(), () => { }, cancelled.Token); throw new Exception("Cancellation ignored"); } catch (OperationCanceledException) { }
     Console.WriteLine("PASS: disconnection, generation limit, tool errors, cancellation");
+
+    var compressionHandler = new MockHandler();
+    using var compressionHttp = new HttpClient(compressionHandler);
+    var compressionClient = new ChatClient(compressionHttp);
+    var before = new ChatSession { Workspace = root, Title = "継続中", Summary = "以前の要約", ContextTokens = 900,
+        Messages = new() { Args("{\"role\":\"user\",\"content\":\"設定ファイルを更新。次はテスト。\"}"), Args("{\"role\":\"assistant\",\"content\":\"設定更新は完了しました。\"}") } };
+    var originalMessages = string.Join("\n", before.Messages.Select(m => m.ToJsonString()));
+    compressionHandler.Responses.Enqueue(Chunk(new() { ["content"] = "設定更新済み。次はテスト。" }, "stop") + Usage(900, 30) + "data: [DONE]\n\n");
+    var compressed = await ChatCommands.CompressAsync(before, compressionClient, new SilentProgress(), default, "low");
+    Assert(compressed.Id == before.Id && compressed.Title == before.Title && compressed.Workspace == root && compressed.Messages.Count == 0 && compressed.Summary == "設定更新済み。次はテスト。" && compressed.ContextTokens == null, "Compressed session metadata or summary incorrect");
+    Assert(string.Join("\n", before.Messages.Select(m => m.ToJsonString())) == originalMessages && before.Summary == "以前の要約" && before.ContextTokens == 900, "Compression changed source before success");
+    Assert(compressionHandler.Requests[0]["tools"] == null && compressionHandler.Requests[0]["tool_choice"] == null, "Compression must not enable tools");
+    Assert(compressionHandler.Requests[0]["messages"]!.AsArray().Any(m => m?["content"]?.ToString().Contains("以前の要約") == true), "Prior summary lost during recompression");
+    store.Save(compressed);
+    Assert(store.Load().Single(s => s.Id == compressed.Id).Summary == compressed.Summary, "Summary persistence failed");
+    compressionHandler.Responses.Enqueue(Chunk(new() { ["content"] = "続きを実行します。" }, "stop") + "data: [DONE]\n\n");
+    compressed.Messages.Add(Args("{\"role\":\"user\",\"content\":\"続けて\"}"));
+    await compressionClient.GenerateAsync(compressed, readonlyTools, new SilentProgress(), () => { }, default);
+    Assert(compressionHandler.Requests[1]["messages"]!.AsArray().Any(m => m?["role"]?.GetValue<string>() == "user" && m["content"]?.ToString().Contains("設定更新済み") == true), "Summary not included in next request");
+    compressionHandler.Responses.Enqueue(Chunk(new() { ["content"] = "" }, "stop") + "data: [DONE]\n\n");
+    await Reject(() => ChatCommands.CompressAsync(before, compressionClient, new SilentProgress(), default, "low"), "Empty summary accepted");
+    compressionHandler.Responses.Enqueue(Chunk(new() { ["content"] = "途中の要約" }));
+    await Reject(() => ChatCommands.CompressAsync(before, compressionClient, new SilentProgress(), default, "low"), "Interrupted summary accepted");
+    compressionHandler.Responses.Enqueue(Call(0, "unwanted", "read_file", "{\"path\":\"notes/a.txt\"}") + Chunk(new(), "tool_calls") + "data: [DONE]\n\n");
+    await Reject(() => ChatCommands.CompressAsync(before, compressionClient, new SilentProgress(), default, "low"), "Tool call accepted during compression");
+    try { await ChatCommands.CompressAsync(before, compressionClient, new SilentProgress(), cancelled.Token, "low"); throw new Exception("Compression cancellation ignored"); } catch (OperationCanceledException) { }
+    Assert(string.Join("\n", before.Messages.Select(m => m.ToJsonString())) == originalMessages && before.Summary == "以前の要約", "Failed compression changed original conversation");
+    var cleared = ChatCommands.Clear(before);
+    Assert(cleared.Id == before.Id && cleared.Workspace == root && cleared.Title == "新しいチャット" && cleared.Summary == "" && cleared.Messages.Count == 0 && cleared.ContextTokens == 0, "Clear did not reset conversation while preserving identity/workspace");
+    Console.WriteLine("PASS: clear, compress/compact aliases, tool-free summarization, saved summary continuation, failure/cancellation preserves source");
     if (args.Contains("--web"))
     {
         var page = await webTools.ExecuteAsync("web_read", Args("{\"url\":\"https://example.com\"}"), default);

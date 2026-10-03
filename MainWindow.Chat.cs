@@ -20,7 +20,11 @@ public sealed partial class MainWindow
     private readonly Dictionary<string, string> drafts = new();
     private readonly Dictionary<string, Queue<JsonObject>> pendingMessages = new();
     private ChatSession? currentChat;
+    private int? maximumChatContext;
     private CancellationTokenSource? chatCancellation;
+    private TaskCompletionSource? activeChatTurn;
+    private bool handlingChatCommand;
+    private CancellationTokenSource? chatCommandCancellation;
     private bool selectingSession;
     private bool followChat = true;
     private ContentControl? streamingText;
@@ -60,7 +64,7 @@ public sealed partial class MainWindow
         page = "chat"; BuildPage();
     }
 
-    private void OnNewChat(object sender, RoutedEventArgs e) { if (chatCancellation == null) CreateChat(); }
+    private void OnNewChat(object sender, RoutedEventArgs e) { if (chatCancellation == null && !handlingChatCommand) CreateChat(); }
 
     private void OnSessionContextRequested(UIElement sender, ContextRequestedEventArgs args)
     {
@@ -103,13 +107,13 @@ public sealed partial class MainWindow
 
     private async Task DeleteChatAsync(ChatSession session)
     {
-        if (chatCancellation != null || !chatSessions.Contains(session)) return;
+        if (chatCancellation != null || handlingChatCommand || !chatSessions.Contains(session)) return;
         try
         {
             var dialog = new ContentDialog { XamlRoot = RootLayout.XamlRoot, Title = "チャットを削除しますか？",
                 Content = new TextBlock { Text = $"「{session.Title}」の会話履歴と添付画像を削除します。", TextWrapping = TextWrapping.Wrap },
                 PrimaryButtonText = "削除", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Close };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary || closing || chatCancellation != null) return;
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary || closing || chatCancellation != null || handlingChatCommand) return;
             chatStore.Delete(session);
             chatSessions.Remove(session); drafts.Remove(session.Id); pendingMessages.Remove(session.Id);
             if (currentChat == session)
@@ -128,7 +132,7 @@ public sealed partial class MainWindow
 
     private void OnSessionSelected(object sender, SelectionChangedEventArgs e)
     {
-        if (selectingSession || chatCancellation != null || SessionList.SelectedItem is not ChatSession session) return;
+        if (selectingSession || chatCancellation != null || handlingChatCommand || SessionList.SelectedItem is not ChatSession session) return;
         if (currentChat != null) drafts[currentChat.Id] = ChatInput.Text;
         currentChat = session; ChatInput.Text = drafts.GetValueOrDefault(session.Id, "");
         followChat = true;
@@ -139,10 +143,11 @@ public sealed partial class MainWindow
 
     private void UpdateChatControls()
     {
+        UpdateChatStatus();
         if (currentChat == null) return;
-        bool busy = chatCancellation != null;
-        SendChatButton.IsEnabled = serverStatus.IsConnected;
-        StopChatButton.IsEnabled = busy;
+        bool busy = chatCancellation != null || handlingChatCommand;
+        SendChatButton.IsEnabled = serverStatus.IsConnected || ChatCommands.Parse(ChatInput.Text) == "clear";
+        StopChatButton.IsEnabled = chatCancellation != null || chatCommandCancellation != null;
         SendChatButton.Visibility = Visibility.Visible;
         StopChatButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         NewChatButton.IsEnabled = !busy;
@@ -155,13 +160,24 @@ public sealed partial class MainWindow
         AttachButton.IsEnabled = true;
     }
 
+    private void UpdateChatStatus()
+    {
+        ChatStatusText.Visibility = page == "chat" ? Visibility.Visible : Visibility.Collapsed;
+        var used = currentChat?.ContextTokens ?? (currentChat?.Messages.Count == 0 && currentChat.Summary.Length == 0 ? 0 : (int?)null);
+        var percentage = used is >= 0 && maximumChatContext is > 0 ? (100d * used.Value / maximumChatContext.Value).ToString("0.#") : "—";
+        ChatStatusText.Text = $"コンテキスト: {used?.ToString("N0") ?? "—"} / {maximumChatContext?.ToString("N0") ?? "—"} トークン ({percentage} %) ｜ 推論: {ChatContextUsage.ReasoningLabel(settings.ChatReasoningEffort)}";
+    }
+
     private void RenderConversation()
     {
         if (closing || currentChat == null) return;
+        UpdateChatStatus();
         RenderPendingMessages();
         ToolTipService.SetToolTip(ChatWorkspaceButton, "作業フォルダー設定\n" + currentChat.Workspace);
         ChatMessages.Children.Clear(); streamingText = null;
-        if (currentChat.Messages.Count == 0)
+        if (currentChat.Summary.Length > 0)
+            ChatMessages.Children.Add(new Expander { Header = "会話の要約", Content = RenderMarkdown(currentChat.Summary), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
+        if (currentChat.Messages.Count == 0 && currentChat.Summary.Length == 0)
         {
             ChatMessages.Children.Add(new TextBlock { Text = "何をお手伝いしましょうか？", FontSize = 24, Margin = new Thickness(0, 32, 0, 12) });
             ChatMessages.Children.Add(new TextBlock { Text = "画像について質問したり、ウェブを参照したり、作業フォルダーのファイルを検索・編集できます。", TextWrapping = TextWrapping.Wrap, Opacity = 0.65 });
@@ -350,6 +366,7 @@ public sealed partial class MainWindow
                     var item = levels.SelectedItem as ComboBoxItem ?? throw new ArgumentException("推論レベルを選択してください。");
                     settings.ChatReasoningEffort = (string)item.Tag; settings.Save();
                     ToolTipService.SetToolTip(ChatReasoningButton, "推論レベル: " + item.Content);
+                    UpdateChatStatus();
                 }
                 catch (Exception ex) { settings.ChatReasoningEffort = previous; args.Cancel = true; error.Text = ex.Message; error.Visibility = Visibility.Visible; }
             };
@@ -401,7 +418,7 @@ public sealed partial class MainWindow
         }
         else { chatSpinnerTimer.Stop(); ChatActivitySpinner.Text = ""; ChatActivitySpinner.Visibility = Visibility.Collapsed; }
     }
-    private void OnStopChat(object sender, RoutedEventArgs e) { chatCancellation?.Cancel(); SetChatActivity("停止しています…"); }
+    private void OnStopChat(object sender, RoutedEventArgs e) { chatCommandCancellation?.Cancel(); chatCancellation?.Cancel(); SetChatActivity("停止しています…"); }
     private void OnChatInputGotFocus(object sender, RoutedEventArgs e) => ChatComposer.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
     private void OnChatInputLostFocus(object sender, RoutedEventArgs e) => ChatComposer.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextControlBorderBrush"];
     private void OnChatKeyDown(object sender, KeyRoutedEventArgs e)
@@ -413,8 +430,10 @@ public sealed partial class MainWindow
 
     private async Task SendChatAsync()
     {
-        if (closing || currentChat == null || !serverStatus.IsConnected) return;
+        if (closing || currentChat == null) return;
         var text = ChatInput.Text.Trim(); var session = currentChat;
+        if (ChatCommands.Parse(text) is { } command) { await RunChatCommandAsync(command, session); return; }
+        if (!serverStatus.IsConnected) return;
         if (!pendingMessages.TryGetValue(session.Id, out var pending)) pendingMessages[session.Id] = pending = new();
         bool hasInput = text.Length > 0 || attachments.Count > 0;
         bool retry = !hasInput && session.Messages.LastOrDefault()?["role"]?.GetValue<string>() is "user" or "tool";
@@ -432,13 +451,76 @@ public sealed partial class MainWindow
             RenderPendingMessages();
             ChatInput.Focus(FocusState.Programmatic);
         }
-        if (chatCancellation != null || (!retry && pending.Count == 0)) return;
+        if (chatCancellation != null || handlingChatCommand || (!retry && pending.Count == 0)) return;
+        await DrainChatQueueAsync(session, pending, retry);
+    }
+
+    private async Task DrainChatQueueAsync(ChatSession session, Queue<JsonObject> pending, bool retry = false)
+    {
         do
         {
             var message = retry ? null : pending.Peek();
             if (!await GenerateChatTurnAsync(session, message, pending)) break;
             retry = false;
-        } while (!closing && serverStatus.IsConnected && pending.Count > 0);
+        } while (!closing && !handlingChatCommand && serverStatus.IsConnected && pending.Count > 0);
+    }
+
+    private void OnChatInputTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (ready) UpdateChatControls();
+    }
+
+    private async Task RunChatCommandAsync(string command, ChatSession session)
+    {
+        if (handlingChatCommand) { ShowError("チャットコマンドを処理中です。"); return; }
+        if (command == "compress" && !serverStatus.IsConnected) { ShowError("会話の圧縮にはサーバーへの接続が必要です。"); return; }
+        if (command == "compress" && attachments.Count > 0) { ShowError("圧縮コマンドに画像は添付できません。画像を取り除いてください。"); return; }
+        using var commandCancellation = new CancellationTokenSource();
+        chatCommandCancellation = commandCancellation;
+        handlingChatCommand = true;
+        ChatInput.Text = ""; drafts.Remove(session.Id);
+        UpdateChatControls();
+        bool completed = false;
+        try
+        {
+            var active = activeChatTurn;
+            if (command == "clear") chatCancellation?.Cancel();
+            if (active != null) { SetChatActivity(command == "clear" ? "停止して会話をクリアしています…" : "回答の完了後に会話を圧縮します…"); await active.Task; }
+            if (closing) return;
+            commandCancellation.Token.ThrowIfCancellationRequested();
+            ChatSession replacement;
+            if (command == "clear") replacement = ChatCommands.Clear(session);
+            else
+            {
+                using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(commandCancellation.Token);
+                cancellation.CancelAfter(TimeSpan.FromMinutes(30));
+                chatCancellation = cancellation;
+                UpdateChatControls(); SetChatActivity("会話を圧縮しています…");
+                var progress = new Progress<ChatProgress>(_ => { if (!closing && chatCancellation == cancellation) SetChatActivity("会話を圧縮しています…"); });
+                replacement = await Task.Run(() => ChatCommands.CompressAsync(session, new ChatClient(chatHttp), progress, cancellation.Token, settings.ChatReasoningEffort));
+                cancellation.Token.ThrowIfCancellationRequested();
+            }
+            // Save the replacement before changing the visible session.
+            chatStore.Save(replacement);
+            session.Messages = replacement.Messages; session.Summary = replacement.Summary;
+            session.Title = replacement.Title; session.ContextTokens = replacement.ContextTokens; session.UpdatedAt = replacement.UpdatedAt;
+            if (command == "clear")
+            {
+                pendingMessages.Remove(session.Id);
+                attachments.Clear(); AttachmentList.Children.Clear(); AttachmentList.Visibility = Visibility.Collapsed;
+            }
+            SetChatActivity(command == "clear" ? "会話をクリアしました。" : "会話を要約して圧縮しました。");
+            completed = true;
+        }
+        catch (OperationCanceledException) { if (!closing) SetChatActivity("コマンドを停止しました。元の会話を保持しています。"); }
+        catch (Exception ex) { if (!closing) { ShowError(ex.Message); SetChatActivity("コマンドを実行できませんでした。元の会話を保持しています。"); } }
+        finally
+        {
+            handlingChatCommand = false; chatCancellation = null; chatCommandCancellation = null;
+            if (!closing) { UpdateChatSpinner(); UpdateChatControls(); RenderConversation(); RefreshSessions(); BuildPage(); }
+        }
+        if (completed && command == "compress" && !closing && serverStatus.IsConnected && pendingMessages.TryGetValue(session.Id, out var pending) && pending.Count > 0)
+            await DrainChatQueueAsync(session, pending);
     }
 
     private void RenderPendingMessages()
@@ -459,8 +541,11 @@ public sealed partial class MainWindow
     private async Task<bool> GenerateChatTurnAsync(ChatSession session, JsonObject? message, Queue<JsonObject> pending)
     {
         ChatSession? generationSession = null;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        activeChatTurn = completion;
         try
         {
+            session.ContextTokens = null;
             if (message != null)
             {
                 var text = message["content"] is JsonValue value ? value.GetValue<string>() : "";
@@ -478,6 +563,7 @@ public sealed partial class MainWindow
             SetChatActivity("回答を待っています…");
             var progress = new Progress<ChatProgress>(update => {
                 if (closing || chatCancellation != cancellation) return;
+                if (update.ContextTokens is { } contextTokens) { session.ContextTokens = contextTokens; UpdateChatStatus(); }
                 if (streamingText != null) streamingText.Content = RenderMarkdown(update.Text);
                 SetChatActivity(update.Activity == "完了" ? "" : update.Activity);
                 ScrollChatToEnd();
@@ -486,11 +572,12 @@ public sealed partial class MainWindow
             var reasoningEffort = settings.ChatReasoningEffort;
             // Generation owns a separate transcript; the UI receives stable snapshots.
             generationSession = new ChatSession { Id = session.Id, Title = session.Title, Workspace = session.Workspace,
-                Messages = session.Messages.Select(m => (JsonObject)m.DeepClone()).ToList() };
+                Summary = session.Summary, Messages = session.Messages.Select(m => (JsonObject)m.DeepClone()).ToList() };
             await Task.Run(() => new ChatClient(chatHttp).GenerateAsync(generationSession, tools, progress, () => {
                 chatStore.Save(generationSession);
                 var snapshot = generationSession.Messages.Select(m => (JsonObject)m.DeepClone()).ToList();
-                DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.UpdatedAt = generationSession.UpdatedAt; RenderConversation(); } });
+                var contextTokens = generationSession.ContextTokens;
+                DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.ContextTokens = contextTokens; session.UpdatedAt = generationSession.UpdatedAt; RenderConversation(); } });
             }, cancellation.Token, reasoningEffort));
             cancellation.Token.ThrowIfCancellationRequested();
             SetChatActivity("");
@@ -500,10 +587,11 @@ public sealed partial class MainWindow
         catch (Exception ex) { if (!closing) { ShowError(ex.Message); SetChatActivity("応答を取得できませんでした。空欄のまま送信すると再試行します。"); } }
         finally
         {
-            if (generationSession != null) { session.Messages = generationSession.Messages; session.UpdatedAt = generationSession.UpdatedAt; }
+            if (generationSession != null) { session.Messages = generationSession.Messages; session.ContextTokens = generationSession.ContextTokens; session.UpdatedAt = generationSession.UpdatedAt; }
             chatCancellation = null;
             if (!closing) UpdateChatSpinner();
             if (!closing) { UpdateChatControls(); RenderConversation(); RefreshSessions(); }
+            activeChatTurn = null; completion.TrySetResult();
         }
         return false;
     }

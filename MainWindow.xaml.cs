@@ -365,6 +365,8 @@ public sealed partial class MainWindow : Window
             webStatus.SetConnection(web != null);
             if (web == null) loadedPort = 0;
             string model = "";
+            maximumChatContext = null;
+            if (server != null) try { maximumChatContext = ChatContextUsage.Maximum(System.Text.Json.Nodes.JsonNode.Parse(server)); } catch (JsonException) { }
             if (server != null) try { using var props = JsonDocument.Parse(server); if (props.RootElement.TryGetProperty("model_alias", out var alias)) model = alias.GetString() ?? ""; } catch (JsonException) { }
             serverStatus.SetConnection(server != null, model);
             UpdateStatus();
