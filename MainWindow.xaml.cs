@@ -21,7 +21,8 @@ public sealed partial class MainWindow : Window
     private readonly WebStartupStatus webStatus = new();
     private Settings settings = new();
     private bool ready, checking, closing;
-    private string page = "server";
+    private string page = "chat";
+    private bool historyExpanded = true;
     private int loadedPort;
     private Task? browserInitialization;
     private Action? saveServerSettings;
@@ -54,6 +55,7 @@ public sealed partial class MainWindow : Window
         spinnerTimer.Tick += (_, _) => { serverStatus.Tick(); webStatus.Tick(); UpdateStatus(); };
         Closed += (_, _) => { closing = true; timer.Stop(); spinnerTimer.Stop(); runner.Dispose(); http.Dispose(); Browser.Close(); };
         ready = true;
+        InitializeChat();
         BuildPage();
         timer.Start();
         _ = RefreshStatusAsync();
@@ -73,7 +75,6 @@ public sealed partial class MainWindow : Window
         else
         {
             AppTitleBar.Visibility = Visibility.Collapsed;
-            Navigation.IsPaneToggleButtonVisible = true;
         }
     }
     private void UpdateCaptionColors()
@@ -104,7 +105,12 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll", ExactSpelling = true)]
     private static extern uint GetDpiForWindow(IntPtr hwnd);
 
-    private void OnPaneToggleRequested(TitleBar sender, object args) => Navigation.IsPaneOpen = !Navigation.IsPaneOpen;
+    private void OnPaneToggleRequested(TitleBar sender, object args)
+    {
+        if (page != "chat") return;
+        historyExpanded = !historyExpanded;
+        HistoryPane.Visibility = historyExpanded ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private void AddLog(string message)
     {
@@ -133,12 +139,10 @@ public sealed partial class MainWindow : Window
         runner.Start(name, ProcessRunner.PowerShell, settings.RepositoryRoot,
             ProcessRunner.ScriptArguments(Script(script), args ?? new()));
     }
-    private void OnSelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    private void OnMenuClick(object sender, RoutedEventArgs args)
     {
-        if (!ready || args.SelectedItem is not NavigationViewItem item) return;
+        if (!ready || sender is not Microsoft.UI.Xaml.Controls.Primitives.ToggleButton item) return;
         page = item.Tag.ToString()!;
-        PageTitle.Text = item.Content.ToString();
-        AppTitleBar.Subtitle = item.Content.ToString();
         BuildPage();
     }
     private TextBox Input(string label, string value = "", bool multiline = false)
@@ -170,15 +174,23 @@ public sealed partial class MainWindow : Window
     }
     private void BuildPage()
     {
+        HistoryPane.Visibility = page == "chat" && historyExpanded ? Visibility.Visible : Visibility.Collapsed;
+        AppTitleBar.IsPaneToggleButtonVisible = page == "chat";
+        foreach (var menu in MenuRail.Children.OfType<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>()) menu.IsChecked = menu.Tag.ToString() == page;
+        PageTitle.Text = page switch { "chat" => currentChat?.Title ?? "チャット", "server" => "llama-server", "web" => "Open WebUI", "cli" => "Claude / Codex", _ => "ログ" };
+        PageTitle.Visibility = page == "chat" ? Visibility.Collapsed : Visibility.Visible;
+        AppTitleBar.Subtitle = PageTitle.Text;
+        ChatPanel.Visibility = page == "chat" ? Visibility.Visible : Visibility.Collapsed;
         saveServerSettings = null;
         ServerCommandBar.Visibility = page == "server" ? Visibility.Visible : Visibility.Collapsed;
         serverLaunchInputs = Array.Empty<TextBox>();
         cliButtons = Array.Empty<Button>();
         Form.Children.Clear();
-        FormScroll.Visibility = page is "web" or "logs" ? Visibility.Collapsed : Visibility.Visible;
+        FormScroll.Visibility = page is "web" or "logs" or "chat" ? Visibility.Collapsed : Visibility.Visible;
         WebPanel.Visibility = page == "web" ? Visibility.Visible : Visibility.Collapsed;
         LogView.Visibility = page == "logs" ? Visibility.Visible : Visibility.Collapsed;
         UpdateWebControls();
+        UpdateChatControls();
         switch (page)
         {
             case "web": _ = EnsureBrowserAsync(); break;
@@ -220,8 +232,8 @@ public sealed partial class MainWindow : Window
     private void OnSaveServerSettings(object sender, RoutedEventArgs e) => Execute(() => saveServerSettings?.Invoke());
     private void OnToggleServer(object sender, RoutedEventArgs e) => Execute(() => {
         if (runner.IsRunning("llama-server")) { runner.Stop("llama-server"); return; }
-        if (ServerActive || saveServerSettings == null) return;
-        saveServerSettings();
+        if (ServerActive) return;
+        saveServerSettings?.Invoke();
         StartServer(new() { ["ModelPath"] = settings.ModelPath, ["MmprojPath"] = settings.MmprojPath, ["ServerExe"] = settings.ServerExe });
     });
     private void StartServer(Dictionary<string, string?> args)
@@ -242,6 +254,11 @@ public sealed partial class MainWindow : Window
         var symbol = active ? Symbol.Stop : Symbol.Play;
         if (ServerStartButton.Icon is SymbolIcon icon && icon.Symbol != symbol) icon.Symbol = symbol;
         ServerStartButton.IsEnabled = !active || runner.IsRunning("llama-server");
+        LlamaStatusButton.IsEnabled = ServerStartButton.IsEnabled;
+        var statusAction = active ? "llama-server を停止" : "llama-server を起動して接続";
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(LlamaStatusButton, statusAction);
+        ToolTipService.SetToolTip(LlamaStatusButton, active && !runner.IsRunning("llama-server")
+            ? "このアプリで起動したサーバーだけ終了できます。" : statusAction);
         ToolTipService.SetToolTip(ServerStartButton, active && !runner.IsRunning("llama-server")
             ? "このアプリで起動したサーバーだけ終了できます。" : null);
         ToolTipService.SetToolTip(ServerSaveButton, active ? "保存した設定は次回起動時に反映されます。" : "設定を保存します。");
@@ -253,12 +270,24 @@ public sealed partial class MainWindow : Window
         UpdateServerControls();
         foreach (var button in cliButtons) button.IsEnabled = serverStatus.IsConnected;
         UpdateWebControls();
-        Status.Text = $"{serverStatus.Spinner}llama-server: {serverStatus.Message}    |    {webStatus.Spinner}Open WebUI: {webStatus.Message}";
+        UpdateChatControls();
+        SetConnectionStatus(LlamaStatusPrefix, LlamaStatusState, LlamaStatusDetail, "llama-server", serverStatus.Spinner, serverStatus.Message);
+        SetConnectionStatus(WebStatusPrefix, WebStatusState, WebStatusDetail, "Open WebUI", webStatus.Spinner, webStatus.Message);
         var starting = serverStatus.IsStarting || webStatus.IsStarting;
         var interval = TimeSpan.FromSeconds(starting ? 1 : 5);
         if (timer.Interval != interval) timer.Interval = interval;
         if (starting && !spinnerTimer.IsEnabled) spinnerTimer.Start();
         else if (!starting) spinnerTimer.Stop();
+    }
+    private static void SetConnectionStatus(Microsoft.UI.Xaml.Documents.Run prefix, Microsoft.UI.Xaml.Documents.Run state,
+        Microsoft.UI.Xaml.Documents.Run detail, string service, string spinner, string message)
+    {
+        prefix.Text = $"{spinner}{service}: ";
+        var keyword = message.StartsWith("接続済み", StringComparison.Ordinal) ? "接続済み" : message == "未接続" ? "未接続" : "";
+        state.Text = keyword;
+        detail.Text = message[keyword.Length..];
+        var resource = keyword == "接続済み" ? "SystemFillColorSuccessBrush" : keyword == "未接続" ? "SystemFillColorCriticalBrush" : "TextFillColorSecondaryBrush";
+        state.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[resource];
     }
     private void UpdateWebControls()
     {

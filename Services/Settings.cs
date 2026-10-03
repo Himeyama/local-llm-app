@@ -18,6 +18,9 @@ public sealed class Settings
     public int MtpDraftTokens { get; set; } = 2;
     public string CliWorkingDirectory { get; set; } = "";
     public int WebPort { get; set; } = 3000;
+    public bool ChatWebEnabled { get; set; } = true;
+    public bool ChatWritesEnabled { get; set; } = true;
+    public string ChatReasoningEffort { get; set; } = "xhigh";
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LocalLlmGui");
     public static Settings Load()
     {
