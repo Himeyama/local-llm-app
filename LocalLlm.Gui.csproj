@@ -25,4 +25,14 @@
     <Content Include="Start-LlamaServer.ps1;Start-OpenWebUI.ps1;configure_openwebui.py;Setup-OpenWebUI.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Cli/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- Node packages are runtime files, not WinUI resources. -->
+  <ItemGroup>
+    <BrowserSearchRuntime Include="BrowserSearch/search.mjs;BrowserSearch/package*.json;BrowserSearch/node_modules/**/*" />
+  </ItemGroup>
+  <Target Name="CopyBrowserSearchRuntime" AfterTargets="Build">
+    <Copy SourceFiles="@(BrowserSearchRuntime)" DestinationFiles="@(BrowserSearchRuntime->'$(OutDir)BrowserSearch/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishBrowserSearchRuntime" AfterTargets="Publish">
+    <Copy SourceFiles="@(BrowserSearchRuntime)" DestinationFiles="@(BrowserSearchRuntime->'$(PublishDir)BrowserSearch/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

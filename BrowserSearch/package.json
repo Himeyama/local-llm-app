@@ -1,0 +1,10 @@
+{
+  "name": "local-llm-browser-search",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test search.test.mjs" },
+  "dependencies": {
+    "@playwright/mcp": "0.0.83",
+    "@modelcontextprotocol/sdk": "1.25.2"
+  }
+}

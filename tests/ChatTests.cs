@@ -37,6 +37,14 @@ try
     await Reject(() => readonlyTools.ExecuteAsync("write_file", Args("{\"path\":\"blocked.txt\",\"content\":\"bad\"}"), default), "Writes disabled but executed");
     await Reject(() => readonlyTools.ExecuteAsync("web_read", Args("{\"url\":\"https://example.com\"}"), default), "Web disabled but executed");
     var webTools = new ChatTools(root, true, false);
+    await Reject(() => webTools.ExecuteAsync("web_search", Args("{\"query\":\"\"}"), default), "Empty browser search accepted");
+    await Reject(() => webTools.ExecuteAsync("web_search", new JsonObject { ["query"] = new string('x', 2001) }, default), "Oversized browser search accepted");
+    using (var searchCancellation = new CancellationTokenSource())
+    {
+        searchCancellation.Cancel();
+        try { await webTools.ExecuteAsync("web_search", Args("{\"query\":\"test\"}"), searchCancellation.Token); throw new Exception("Browser search cancellation ignored"); }
+        catch (OperationCanceledException) { }
+    }
     await Reject(() => webTools.ExecuteAsync("web_read", Args("{\"url\":\"http://127.0.0.1:9931/props\"}"), default), "Loopback web access accepted");
     await Reject(() => webTools.ExecuteAsync("web_read", Args("{\"url\":\"file:///C:/Windows/win.ini\"}"), default), "File URL accepted");
     var junction = Path.Combine(root, "junction");
@@ -99,6 +107,16 @@ try
             Console.WriteLine("PASS: real web search and source URLs");
         }
         catch (IOException e) { Console.WriteLine("Web search provider unavailable: " + e.Message); }
+        using var activeSearchCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+        var stopWatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await webTools.ExecuteAsync("web_search", Args("{\"query\":\"llama.cpp github\"}"), activeSearchCancellation.Token);
+            throw new Exception("Active browser search cancellation ignored");
+        }
+        catch (OperationCanceledException) { }
+        Assert(stopWatch.Elapsed < TimeSpan.FromSeconds(10), "Browser search did not stop promptly");
+        Console.WriteLine("PASS: active browser search cancellation and process cleanup");
     }
 }
 finally { Directory.Delete(root, true); }

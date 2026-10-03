@@ -15,3 +15,11 @@ wan_models/
 runtime/
 openwebui/
 __pycache__/
+node_modules/
+.npm-cache/
+.playwright-mcp/
+.playwright/
+ms-playwright/
+playwright-report/
+test-results/
+BrowserSearch/.cache/
