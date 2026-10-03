@@ -1,6 +1,8 @@
 # Local LLM GUI
 
-WinUI 3 / C# / .NET 8 の Windows アプリです。ウィンドウの背景は Mica を使用します。このリポジトリ内のスクリプト、モデル、llama.cpp、Open WebUI を使います。親リポジトリのスクリプトや設定は参照しません。
+WinUI 3 / C# / .NET 8 のローカル LLM を扱う Windows アプリです。このリポジトリ内のスクリプト、モデル、llama.cpp、Open WebUI を使います。
+
+<img width="600" src="https://github.com/user-attachments/assets/872b5c0f-1a7b-49b1-9fd7-63f2db3fbfbf" />
 
 ## 起動
 
