@@ -45,8 +45,73 @@ try
     File.WriteAllBytes(Path.Combine(root, "binary.dat"), new byte[] { 0, 1, 2 });
     await Reject(() => tools.ExecuteAsync("write_file", Args("{\"path\":\"binary.dat\",\"content\":\"bad\"}"), default), "Binary overwrite accepted");
     var readonlyTools = new ChatTools(root, false, false);
+    Assert(readonlyTools.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "list_directory"), "Directory listing must be available with writes and web disabled");
+    Directory.CreateDirectory(Path.Combine(root, ".git"));
+    var rootListing = JsonNode.Parse(await readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\".\"}"), default))!;
+    var rootEntries = rootListing["entries"]!.AsArray();
+    Assert(rootEntries.Any(e => e?["name"]?.GetValue<string>() == "notes" && e["type"]!.GetValue<string>() == "directory"), "Root listing must include immediate directories");
+    Assert(rootEntries.Any(e => e?["name"]?.GetValue<string>() == "binary.dat" && e["type"]!.GetValue<string>() == "file"), "Listing must include binary files without reading their contents");
+    Assert(!rootEntries.Any(e => e?["name"]?.GetValue<string>() is ".git" or "chat-backups" or "a.txt"), "Listing must exclude protected folders and descendants");
+    var notesListing = JsonNode.Parse(await readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"notes\"}"), default))!;
+    Assert(notesListing["entries"]!.AsArray().Single()!["path"]!.GetValue<string>() == Path.Combine("notes", "a.txt"), "Listed paths must be usable workspace-relative paths");
+    await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"..\"}"), default), "Directory traversal accepted");
+    await Reject(() => readonlyTools.ExecuteAsync("list_directory", new JsonObject { ["path"] = root }, default), "Absolute directory path accepted");
+    await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\".git\"}"), default), "Protected directory listing accepted");
+    await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"missing\"}"), default), "Missing directory accepted");
+    await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"repeat.txt\"}"), default), "File accepted as a directory");
+    await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\".\",\"offset\":-1}"), default), "Negative listing offset accepted");
+    var manyFolder = Path.Combine(root, "many"); Directory.CreateDirectory(manyFolder);
+    var emptyListing = JsonNode.Parse(await readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"many\"}"), default))!;
+    Assert(emptyListing["entries"]!.AsArray().Count == 0 && emptyListing["next_offset"] == null, "Empty directory must return an empty complete listing");
+    for (int i = 200; i >= 0; i--) File.WriteAllText(Path.Combine(manyFolder, $"{i:D3}.txt"), "");
+    var firstPage = JsonNode.Parse(await readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"many\"}"), default))!;
+    var lastPage = JsonNode.Parse(await readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"many\",\"offset\":200}"), default))!;
+    Assert(firstPage["entries"]!.AsArray().Count == 200 && firstPage["entries"]![0]!["name"]!.GetValue<string>() == "000.txt" && firstPage["next_offset"]!.GetValue<int>() == 200 && firstPage["total_entries"]!.GetValue<int>() == 201, "Directory pagination must be sorted and indicate remaining entries");
+    Assert(lastPage["entries"]!.AsArray().Single()!["name"]!.GetValue<string>() == "200.txt" && lastPage["next_offset"] == null, "Final directory page must return remaining entries without repetition");
+    using (var listingCancellation = new CancellationTokenSource())
+    {
+        listingCancellation.Cancel();
+        try { await readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\".\"}"), listingCancellation.Token); throw new Exception("Directory listing ignored cancellation"); }
+        catch (OperationCanceledException) { }
+    }
     await Reject(() => readonlyTools.ExecuteAsync("write_file", Args("{\"path\":\"blocked.txt\",\"content\":\"bad\"}"), default), "Writes disabled but executed");
     await Reject(() => readonlyTools.ExecuteAsync("web_read", Args("{\"url\":\"https://example.com\"}"), default), "Web disabled but executed");
+    var commandTools = new ChatTools(root, false, false, allowCommands: true);
+    Assert(commandTools.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "execute_command") && !readonlyTools.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "execute_command"), "Command definition must follow its enable setting");
+    await Reject(() => readonlyTools.ExecuteAsync("execute_command", Args("{\"command\":\"Write-Output 'blocked'\"}"), default), "Disabled command execution accepted");
+    var commandResult = JsonNode.Parse(await commandTools.ExecuteAsync("execute_command", new JsonObject { ["command"] = "[Console]::WriteLine('日本語');\n[Console]::WriteLine((Get-Location).Path); [Console]::Error.WriteLine('エラー'); exit 7", ["working_directory"] = "notes" }, default))!;
+    Assert(commandResult["exit_code"]!.GetValue<int>() == 7 && commandResult["stdout"]!.GetValue<string>().Contains("日本語") && commandResult["stdout"]!.GetValue<string>().Contains(Path.Combine(root, "notes")) && commandResult["stderr"]!.GetValue<string>().Contains("エラー") && !commandResult["timed_out"]!.GetValue<bool>(), "Commands must preserve multiline scripts, UTF-8 output, working directory, stderr and exit code");
+    var nativeResult = JsonNode.Parse(await commandTools.ExecuteAsync("execute_command", Args("{\"command\":\"cmd.exe /c exit 9\"}"), default))!;
+    Assert(nativeResult["exit_code"]!.GetValue<int>() == 9, "Native command failure exit code lost");
+    var thrownResult = JsonNode.Parse(await commandTools.ExecuteAsync("execute_command", Args("{\"command\":\"throw 'intentional failure'\"}"), default))!;
+    Assert(thrownResult["exit_code"]!.GetValue<int>() != 0 && thrownResult["stderr"]!.GetValue<string>().Contains("intentional failure"), "PowerShell errors must be reported as failures");
+    var largeResult = JsonNode.Parse(await commandTools.ExecuteAsync("execute_command", Args("{\"command\":\"[Console]::Write(('x' * 50000)); [Console]::Error.Write(('y' * 50000))\"}"), default))!;
+    Assert(largeResult["exit_code"]!.GetValue<int>() == 0 && largeResult["stdout"]!.GetValue<string>().Length == 20000 && largeResult["stderr"]!.GetValue<string>().Length == 20000 && largeResult["stdout_truncated"]!.GetValue<bool>() && largeResult["stderr_truncated"]!.GetValue<bool>(), "Large outputs must be drained without deadlock, bounded and marked truncated");
+    await Reject(() => commandTools.ExecuteAsync("execute_command", Args("{\"command\":\"\"}"), default), "Empty command accepted");
+    await Reject(() => commandTools.ExecuteAsync("execute_command", Args("{\"command\":\"Get-Location\",\"working_directory\":\"..\"}"), default), "Command starting directory escaped workspace");
+    await Reject(() => commandTools.ExecuteAsync("execute_command", Args("{\"command\":\"Get-Location\",\"timeout_seconds\":0}"), default), "Invalid command timeout accepted");
+    var timedResult = JsonNode.Parse(await commandTools.ExecuteAsync("execute_command", Args("{\"command\":\"Start-Sleep -Seconds 60\",\"timeout_seconds\":1}"), default))!;
+    Assert(timedResult["timed_out"]!.GetValue<bool>(), "Command timeout must stop execution and be reported");
+    using (var commandCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+    {
+        var childPidPath = Path.Combine(root, "command-child.txt");
+        var childCommand = "$p = Start-Process -FilePath '" + ProcessRunner.PowerShell.Replace("'", "''") + "' -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 60' -WindowStyle Hidden -PassThru; [IO.File]::WriteAllText('" + childPidPath.Replace("'", "''") + "', [string]$p.Id); Start-Sleep -Seconds 60";
+        var runningCommand = commandTools.ExecuteAsync("execute_command", new JsonObject { ["command"] = childCommand }, commandCancellation.Token);
+        try
+        {
+            while (!File.Exists(childPidPath) || File.ReadAllText(childPidPath).Length == 0) { await Task.Delay(100, commandCancellation.Token); if (runningCommand.IsCompleted) await runningCommand; }
+            using var childProcess = System.Diagnostics.Process.GetProcessById(int.Parse(File.ReadAllText(childPidPath)));
+            commandCancellation.Cancel();
+            try { await runningCommand; throw new Exception("Active command ignored cancellation"); }
+            catch (OperationCanceledException) { }
+            await childProcess.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert(childProcess.HasExited, "Command cancellation must kill child processes");
+        }
+        finally { commandCancellation.Cancel(); try { await runningCommand; } catch (OperationCanceledException) { } }
+    }
+    var commandsSettings = System.Text.Json.JsonSerializer.Deserialize<Settings>(System.Text.Json.JsonSerializer.Serialize(new Settings { ChatCommandsEnabled = false }))!;
+    Assert(!commandsSettings.ChatCommandsEnabled, "Command enable setting must persist");
+    Console.WriteLine("PASS: command enable setting, multiline/UTF-8 output, working directory, stderr/exit codes, bounded output, timeout and active child-process cancellation");
     var webTools = new ChatTools(root, true, false);
     await Reject(() => webTools.ExecuteAsync("web_search", Args("{\"query\":\"\"}"), default), "Empty browser search accepted");
     await Reject(() => webTools.ExecuteAsync("web_search", new JsonObject { ["query"] = new string('x', 2001) }, default), "Oversized browser search accepted");
@@ -61,7 +126,11 @@ try
     var junction = Path.Combine(root, "junction");
     using (var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe") { Arguments = $"/c mklink /J \"{junction}\" \"{Path.Combine(root, "notes")}\"", CreateNoWindow = true, RedirectStandardOutput = true })) { process!.WaitForExit(); Assert(process.ExitCode == 0, "Test junction creation failed"); }
     await Reject(() => tools.ExecuteAsync("read_file", Args("{\"path\":\"junction/a.txt\"}"), default), "Junction traversal accepted");
+    await Reject(() => tools.ExecuteAsync("list_directory", Args("{\"path\":\"junction\"}"), default), "Directory listing traversed a junction");
+    var linkedListing = JsonNode.Parse(await tools.ExecuteAsync("list_directory", Args("{\"path\":\".\"}"), default))!;
+    Assert(!linkedListing["entries"]!.AsArray().Any(e => e?["name"]?.GetValue<string>() == "junction"), "Directory listing must omit junction entries");
     Directory.Delete(junction);
+    Console.WriteLine("PASS: immediate directory listings, binary files, relative paths, protected folders/junctions, sorted pagination, empty directories and cancellation");
     Console.WriteLine("PASS: UTF-8 file create/read/search/edit, backups, traversal/junction protection, ambiguous edit, binary and disabled tool rejection, public URL checks");
 
     var store = new ChatStore(Path.Combine(root, "history"));
@@ -78,14 +147,22 @@ try
     Console.WriteLine("PASS: session deletion persists and preserves other histories, invalid ID rejected");
 
     var handler = new MockHandler();
-    handler.Responses.Enqueue(Call(0, "call_1", "read_file", "{\"path\":") + Call(0, null, null, "\"notes/a.txt\"}") + Chunk(new(), "tool_calls") + Usage(100, 20) + "data: [DONE]\n\n");
-    handler.Responses.Enqueue(Chunk(new() { ["content"] = "日本語" }) + Chunk(new() { ["content"] = "の回答" }, "stop") + Usage(250, 30) + "data: [DONE]\n\n");
+    handler.Responses.Enqueue(Chunk(new() { ["reasoning_content"] = "ファイルを確認します。" }) + Call(0, "call_1", "read_file", "{\"path\":") + Call(0, null, null, "\"notes/a.txt\"}") + Chunk(new(), "tool_calls") + Usage(100, 20) + "data: [DONE]\n\n");
+    handler.Responses.Enqueue(Chunk(new() { ["reasoning_content"] = "結果を" }) + Chunk(new() { ["reasoning_content"] = "まとめます。" }) + Chunk(new() { ["content"] = "日本語" }) + Chunk(new() { ["content"] = "の回答" }, "stop") + Usage(250, 30) + "data: [DONE]\n\n");
     using var client = new HttpClient(handler);
     int saves = 0;
-    await new ChatClient(client).GenerateAsync(session, readonlyTools, new SilentProgress(), () => { saves++; store.Save(session); }, default, "low");
+    var reasoningProgress = new CapturingProgress();
+    await new ChatClient(client).GenerateAsync(session, readonlyTools, reasoningProgress, () => { saves++; store.Save(session); }, default, "low");
     Assert(saves == 2 && session.Messages.Count == 4, "Tool cycle persistence failed");
     Assert(session.Messages[2]["role"]!.GetValue<string>() == "tool" && session.Messages[2]["content"]!.GetValue<string>().Contains("世界"), "Tool result missing");
     Assert(session.Messages[3]["content"]!.GetValue<string>() == "日本語の回答", "Stream assembly failed");
+    Assert(session.Messages[1]["reasoning_content"]!.GetValue<string>() == "ファイルを確認します。" && session.Messages[3]["reasoning_content"]!.GetValue<string>() == "結果をまとめます。", "Reasoning fragments must be assembled separately for each tool/answer round");
+    Assert(reasoningProgress.Updates.Any(u => u.Reasoning == "結果をまとめます。" && u.Text == "日本語の回答"), "Progress must include full reasoning separately from the answer");
+    Assert(store.Load().Single().Messages[3]["reasoning_content"]!.GetValue<string>() == "結果をまとめます。", "Reasoning must survive history reload");
+    Assert(handler.Requests.All(r => r["messages"]!.AsArray().All(m => m?["reasoning_content"] == null)), "Display reasoning metadata must not be sent back to the model");
+    var visibilitySettings = System.Text.Json.JsonSerializer.Deserialize<Settings>(System.Text.Json.JsonSerializer.Serialize(new Settings { ChatShowReasoning = false }))!;
+    Assert(!visibilitySettings.ChatShowReasoning && System.Text.Json.JsonSerializer.Deserialize<Settings>("{}")!.ChatShowReasoning, "Reasoning visibility setting must roundtrip and default to visible");
+    Console.WriteLine("PASS: separate streamed reasoning, per-round assembly, history persistence, display-only metadata and visibility setting");
     Assert(handler.Requests.All(r => r["model"]!.GetValue<string>() == "server-model"), "Model ID must come from props");
     Assert(handler.Requests.All(r => r["reasoning_effort"]!.GetValue<string>() == "low"), "Reasoning level must reach every model/tool turn");
     Assert(handler.Requests.All(r => r["stream_options"]!["include_usage"]!.GetValue<bool>()), "Streaming usage must be requested for every round");
@@ -94,6 +171,41 @@ try
     Assert(handler.Requests[1]["messages"]!.AsArray().Any(m => m?["tool_call_id"]?.GetValue<string>() == "call_1"), "Tool result not sent to model");
     Assert(handler.Requests[0]["messages"]![1]!["content"]![1]!["image_url"]!["url"]!.GetValue<string>().StartsWith("data:image/png"), "Image not sent to model");
     Console.WriteLine("PASS: props model discovery, image payload, fragmented SSE tool calls, execution and next-turn tool results, final streamed reply");
+
+    var extendedHandler = new MockHandler();
+    using var extendedHttp = new HttpClient(extendedHandler);
+    var extendedClient = new ChatClient(extendedHttp);
+    var extendedSession = new ChatSession { Workspace = root };
+    for (int round = 0; round < 13; round++)
+        extendedHandler.Responses.Enqueue(Call(0, "extended_" + round, "read_file", "{\"path\":\"notes/a.txt\"}") + Chunk(new(), "tool_calls") + "data: [DONE]\n\n");
+    extendedHandler.Responses.Enqueue(Chunk(new() { ["content"] = "完了しました" }, "stop") + "data: [DONE]\n\n");
+    int extendedSaves = 0;
+    await extendedClient.GenerateAsync(extendedSession, readonlyTools, new SilentProgress(), () => extendedSaves++, default);
+    Assert(extendedHandler.Requests.Count == 14 && extendedSaves == 14, "Tool loop must continue beyond twelve rounds and save every round");
+    Assert(extendedSession.Messages.Count(m => m["role"]!.GetValue<string>() == "tool") == 13 && extendedSession.Messages.Last()["content"]!.GetValue<string>() == "完了しました", "Extended tool loop must reach the final answer with complete results");
+
+    var batch = string.Concat(Enumerable.Range(0, 17).Select(i => Call(i, "batch_" + i, "read_file", "{\"path\":\"notes/a.txt\"}")));
+    extendedHandler.Responses.Enqueue(batch + Chunk(new(), "tool_calls") + "data: [DONE]\n\n");
+    extendedHandler.Responses.Enqueue(Chunk(new() { ["content"] = "まとめて完了" }, "stop") + "data: [DONE]\n\n");
+    var batchSession = new ChatSession { Workspace = root };
+    await extendedClient.GenerateAsync(batchSession, readonlyTools, new SilentProgress(), () => { }, default);
+    Assert(batchSession.Messages.Count(m => m["role"]!.GetValue<string>() == "tool") == 17 && batchSession.Messages.Last()["content"]!.GetValue<string>() == "まとめて完了", "Independent tool batches must not have a fixed call-count limit");
+
+    using (var loopCancellation = new CancellationTokenSource())
+    {
+        for (int round = 0; round < 13; round++)
+            extendedHandler.Responses.Enqueue(Call(0, "cancel_" + round, "read_file", "{\"path\":\"notes/a.txt\"}") + Chunk(new(), "tool_calls") + "data: [DONE]\n\n");
+        var cancelledLoop = new ChatSession { Workspace = root };
+        int loopSaves = 0, requestsBefore = extendedHandler.Requests.Count;
+        try
+        {
+            await extendedClient.GenerateAsync(cancelledLoop, readonlyTools, new SilentProgress(), () => { if (++loopSaves == 13) loopCancellation.Cancel(); }, loopCancellation.Token);
+            throw new Exception("Extended tool loop ignored cancellation");
+        }
+        catch (OperationCanceledException) { }
+        Assert(loopSaves == 13 && extendedHandler.Requests.Count - requestsBefore == 13 && cancelledLoop.Messages.Count == 26, "Cancellation must stop further requests and preserve complete tool-call/result pairs");
+    }
+    Console.WriteLine("PASS: unlimited tool rounds, large independent batches, extended-loop cancellation and persistence");
 
     var interrupted = new ChatSession { Workspace = root, Messages = new() { Args("{\"role\":\"user\",\"content\":\"test\"}") } };
     await Reject(() => new ChatClient(client).GenerateAsync(interrupted, readonlyTools, new SilentProgress(), () => { }, default, "invalid"), "Invalid reasoning level accepted");
@@ -167,6 +279,11 @@ try
 finally { Directory.Delete(root, true); }
 
 sealed class SilentProgress : IProgress<ChatProgress> { public void Report(ChatProgress value) { } }
+sealed class CapturingProgress : IProgress<ChatProgress>
+{
+    public List<ChatProgress> Updates { get; } = new();
+    public void Report(ChatProgress value) => Updates.Add(value);
+}
 sealed class MockHandler : HttpMessageHandler
 {
     public Queue<string> Responses { get; } = new();

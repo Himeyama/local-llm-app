@@ -100,6 +100,7 @@
                     <Button x:Name="ChatToolsButton" Click="OnChatToolsSettings" ToolTipService.ToolTip="ツール設定" AutomationProperties.Name="ツール設定"><SymbolIcon Symbol="Repair"/></Button>
                   </StackPanel>
                   <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8" Spacing="4">
+                    <ToggleButton x:Name="ChatReasoningVisibilityButton" Click="OnToggleChatReasoningVisibility" Width="40" Height="40" Padding="0" BorderThickness="0" ToolTipService.ToolTip="推論内容の表示" AutomationProperties.Name="推論内容の表示"><FontIcon Glyph="&#xE890;"/></ToggleButton>
                     <Button x:Name="ChatReasoningButton" Click="OnChatReasoningSettings" Width="40" Height="40" Padding="0" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="推論レベル" AutomationProperties.Name="推論レベル"><FontIcon Glyph="&#xE82F;"/></Button>
                     <Button x:Name="SendChatButton" Click="OnSendChat" Style="{StaticResource AccentButtonStyle}" Width="40" Height="40" Padding="0" CornerRadius="20" BorderThickness="0" ToolTipService.ToolTip="送信" AutomationProperties.Name="送信"><SymbolIcon Symbol="Send"/></Button>
                     <Button x:Name="StopChatButton" Click="OnStopChat" Width="40" Height="40" Padding="0" CornerRadius="20" Visibility="Collapsed" ToolTipService.ToolTip="停止" AutomationProperties.Name="停止"><SymbolIcon Symbol="Stop"/></Button>

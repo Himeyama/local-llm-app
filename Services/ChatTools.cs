@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 
 namespace LocalLlm.Gui.Services;
 
-public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites, string? backupDirectory = null)
+public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites, string? backupDirectory = null, bool allowCommands = false)
 {
     private const int FileLimit = 1024 * 1024;
     private static readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase)
@@ -22,12 +22,21 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
                 ["name"] = name, ["description"] = description,
                 ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = properties, ["required"] = required, ["additionalProperties"] = false } } });
         }
-        Add("search_files", "Search file paths and UTF-8 text in the selected workspace. Returns relative paths and matching lines. Empty query lists files.", ("query", "Literal text or part of filename"));
+        Add("list_directory", "List immediate files and directories without reading their contents. Use path '.' for the workspace root. Returns name, workspace-relative path and type, sorted by name. Protected folders and links are excluded. Returns up to 200 entries; if next_offset is not null, use it as offset to retrieve the next page. Prefer this tool to search_files when inspecting a directory's structure.", ("path", "Workspace-relative directory path, or '.' for the root"));
+        tools.Last()!["function"]!["parameters"]!["properties"]!["offset"] = new JsonObject { ["type"] = "integer", ["minimum"] = 0, ["description"] = "Optional zero-based pagination offset; defaults to 0" };
+        Add("search_files", "Search file paths and UTF-8 text in the selected workspace. Returns relative paths and matching lines. Empty query lists files recursively; use list_directory for immediate directory contents.", ("query", "Literal text or part of filename"));
         Add("read_file", "Read a UTF-8 text file in the selected workspace (up to 1 MiB).", ("path", "Relative file path"));
         if (allowWrites)
         {
             Add("write_file", "Create or overwrite a UTF-8 text file in the selected workspace. Existing files are backed up in chat-backups before replacement.", ("path", "Relative file path"), ("content", "Complete new contents"));
             Add("edit_file", "Replace one unique exact occurrence of old_text in a UTF-8 file. Existing file is backed up. Fails if missing or ambiguous.", ("path", "Relative file path"), ("old_text", "Exact nonempty text occurring once"), ("new_text", "Replacement text"));
+        }
+        if (allowCommands)
+        {
+            Add("execute_command", "Run a non-interactive Windows PowerShell command from the selected workspace. Returns stdout, stderr, exit_code and timed_out. Each output stream is limited to 20,000 characters and marked if truncated. Default timeout is 60 seconds; cancellation and timeout stop the process tree. Commands run with the app's user permissions, without a filesystem or network sandbox; file-tool restrictions and backups do not apply. Prefer dedicated tools for simple file/web operations. Do not launch detached background processes or interactive windows.", ("command", "PowerShell command or multiline script, up to 8,000 characters"));
+            var properties = tools.Last()!["function"]!["parameters"]!["properties"]!;
+            properties["working_directory"] = new JsonObject { ["type"] = "string", ["description"] = "Optional workspace-relative working directory; defaults to '.'" };
+            properties["timeout_seconds"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 1800, ["description"] = "Optional timeout in seconds; defaults to 60" };
         }
         if (allowWeb)
         {
@@ -37,13 +46,15 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
         return tools;
     }
 
-    public string ResolvePath(string relative)
+    public string ResolvePath(string relative) => ResolvePath(relative, allowWorkspaceRoot: false);
+
+    private string ResolvePath(string relative, bool allowWorkspaceRoot)
     {
         if (string.IsNullOrWhiteSpace(workspace) || !Directory.Exists(workspace)) throw new IOException("作業フォルダーを選択してください。");
         if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) || relative.Contains(':')) throw new IOException("相対パスを指定してください。");
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
         var full = Path.GetFullPath(relative, root);
-        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new IOException("作業フォルダー外の操作はできません。");
+        if (!(allowWorkspaceRoot && full.Equals(root, StringComparison.OrdinalIgnoreCase)) && !full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new IOException("作業フォルダー外の操作はできません。");
         // Check every existing component, including the workspace, for junctions/symlinks.
         for (var info = new DirectoryInfo(root); info != null; info = info.Parent)
             if ((info.Attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("リンクを含む作業フォルダーは使用できません。");
@@ -56,6 +67,32 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
                 throw new IOException("シンボリックリンク・ジャンクションは操作できません。");
         }
         return full;
+    }
+
+    private string ListDirectory(string relative, int offset, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (offset < 0) throw new ArgumentException("offset は 0 以上を指定してください。");
+        var folder = ResolvePath(relative, allowWorkspaceRoot: true);
+        if (!Directory.Exists(folder)) throw new IOException("指定されたディレクトリが存在しません。");
+        var entries = new List<(string Name, string Path, string Type)>();
+        foreach (var entry in Directory.EnumerateFileSystemEntries(folder))
+        {
+            ct.ThrowIfCancellationRequested();
+            var name = Path.GetFileName(entry);
+            if (Excluded.Contains(name) || name.Equals("chat-backups", StringComparison.OrdinalIgnoreCase)) continue;
+            var attributes = File.GetAttributes(entry);
+            if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+            entries.Add((name, Path.GetRelativePath(workspace, entry), (attributes & FileAttributes.Directory) != 0 ? "directory" : "file"));
+        }
+        var page = new JsonArray();
+        foreach (var entry in entries.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ThenBy(e => e.Name, StringComparer.Ordinal).Skip(offset).Take(200))
+        {
+            ct.ThrowIfCancellationRequested();
+            page.Add(new JsonObject { ["name"] = entry.Name, ["path"] = entry.Path, ["type"] = entry.Type });
+        }
+        return new JsonObject { ["path"] = Path.GetRelativePath(workspace, folder), ["entries"] = page,
+            ["total_entries"] = entries.Count, ["next_offset"] = offset < entries.Count - page.Count ? JsonValue.Create(offset + page.Count) : null }.ToJsonString();
     }
 
     private static async Task<string> ReadText(string path, CancellationToken ct)
@@ -126,6 +163,11 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
         string Get(string key) => args[key]?.GetValue<string>() ?? throw new ArgumentException(key + " が必要です。");
         switch (name)
         {
+            case "execute_command" when allowCommands:
+                var directory = ResolvePath(args["working_directory"]?.GetValue<string>() ?? ".", allowWorkspaceRoot: true);
+                if (!Directory.Exists(directory)) throw new IOException("指定されたディレクトリが存在しません。");
+                return await ChatCommandExecution.RunAsync(Get("command"), directory, args["timeout_seconds"]?.GetValue<int>() ?? 60, ct);
+            case "list_directory": return ListDirectory(Get("path"), args["offset"]?.GetValue<int>() ?? 0, ct);
             case "search_files": return await Search(Get("query"), ct);
             case "read_file": return await ReadText(ResolvePath(Get("path")), ct);
             case "write_file": return await Write(ResolvePath(Get("path")), Get("content"), ct);

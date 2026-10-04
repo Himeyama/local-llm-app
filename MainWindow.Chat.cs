@@ -28,6 +28,7 @@ public sealed partial class MainWindow
     private bool selectingSession;
     private bool followChat = true;
     private ContentControl? streamingText;
+    private ChatProgress? streamingProgress;
     private const string ChatSpinnerFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
     private int chatSpinnerFrame;
     private readonly DispatcherTimer chatSpinnerTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
@@ -155,6 +156,7 @@ public sealed partial class MainWindow
         ChatWorkspaceButton.IsEnabled = !busy;
         ChatToolsButton.IsEnabled = !busy;
         ChatReasoningButton.IsEnabled = !busy;
+        UpdateReasoningVisibilityButton();
         AttachmentList.IsHitTestVisible = true;
         ChatInput.IsEnabled = true;
         AttachButton.IsEnabled = true;
@@ -186,6 +188,8 @@ public sealed partial class MainWindow
         {
             var role = message["role"]?.GetValue<string>();
             var block = new StackPanel { Spacing = 8 };
+            if (role == "assistant" && settings.ChatShowReasoning && message["reasoning_content"]?.GetValue<string>() is { Length: > 0 } reasoning)
+                block.Children.Add(RenderReasoning(reasoning));
             if (role == "tool")
             {
                 var detail = MessageText(message["content"]?.GetValue<string>() ?? "");
@@ -223,10 +227,42 @@ public sealed partial class MainWindow
         }
         if (chatCancellation != null)
         {
-            streamingText = new ContentControl { HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            streamingText = new ContentControl { HorizontalContentAlignment = HorizontalAlignment.Stretch, Content = RenderStreamingProgress() };
             ChatMessages.Children.Add(streamingText);
         }
         ScrollChatToEnd();
+    }
+
+    private static TextBlock RenderReasoning(string text) => new() {
+        Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 14,
+        Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+    };
+
+    private StackPanel RenderStreamingProgress()
+    {
+        var block = new StackPanel { Spacing = 8 };
+        if (streamingProgress is { } update)
+        {
+            if (settings.ChatShowReasoning && update.Reasoning.Length > 0) block.Children.Add(RenderReasoning(update.Reasoning));
+            if (update.Text.Length > 0) block.Children.Add(RenderMarkdown(update.Text));
+        }
+        return block;
+    }
+
+    private void UpdateReasoningVisibilityButton()
+    {
+        ChatReasoningVisibilityButton.IsChecked = settings.ChatShowReasoning;
+        var label = settings.ChatShowReasoning ? "推論内容を非表示にする" : "推論内容を表示する";
+        ToolTipService.SetToolTip(ChatReasoningVisibilityButton, label);
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ChatReasoningVisibilityButton, label);
+    }
+
+    private void OnToggleChatReasoningVisibility(object sender, RoutedEventArgs e)
+    {
+        var previous = settings.ChatShowReasoning;
+        try { settings.ChatShowReasoning = ChatReasoningVisibilityButton.IsChecked == true; settings.Save(); }
+        catch (Exception ex) { settings.ChatShowReasoning = previous; ShowError(ex.Message); }
+        UpdateReasoningVisibilityButton(); RenderConversation();
     }
 
     private StackPanel RenderMarkdown(string text) => new MarkdownView(uri => Execute(() =>
@@ -326,16 +362,18 @@ public sealed partial class MainWindow
         {
             var web = new ToggleSwitch { Header = "ウェブ検索", IsOn = settings.ChatWebEnabled, OnContent = "有効", OffContent = "無効" };
             var writes = new ToggleSwitch { Header = "ファイル変更", IsOn = settings.ChatWritesEnabled, OnContent = "有効", OffContent = "無効" };
+            var commands = new ToggleSwitch { Header = "コマンド実行", IsOn = settings.ChatCommandsEnabled, OnContent = "有効", OffContent = "無効" };
             var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
             var content = new StackPanel { Spacing = 12, MinWidth = 320 };
-            content.Children.Add(web); content.Children.Add(writes);
+            content.Children.Add(web); content.Children.Add(writes); content.Children.Add(commands);
+            content.Children.Add(new TextBlock { Text = "コマンドはアプリと同じ権限で実行します。ファイル操作ツールのアクセス制限やバックアップは適用されません。", TextWrapping = TextWrapping.Wrap, MaxWidth = 400, Opacity = 0.65 });
             content.Children.Add(error);
             var dialog = new ContentDialog { XamlRoot = RootLayout.XamlRoot, Title = "ツール設定", Content = content,
                 PrimaryButtonText = "保存", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Primary };
             dialog.PrimaryButtonClick += (_, args) => {
-                var oldWeb = settings.ChatWebEnabled; var oldWrites = settings.ChatWritesEnabled;
-                try { settings.ChatWebEnabled = web.IsOn; settings.ChatWritesEnabled = writes.IsOn; settings.Save(); }
-                catch (Exception ex) { settings.ChatWebEnabled = oldWeb; settings.ChatWritesEnabled = oldWrites; args.Cancel = true; error.Text = ex.Message; error.Visibility = Visibility.Visible; }
+                var oldWeb = settings.ChatWebEnabled; var oldWrites = settings.ChatWritesEnabled; var oldCommands = settings.ChatCommandsEnabled;
+                try { settings.ChatWebEnabled = web.IsOn; settings.ChatWritesEnabled = writes.IsOn; settings.ChatCommandsEnabled = commands.IsOn; settings.Save(); }
+                catch (Exception ex) { settings.ChatWebEnabled = oldWeb; settings.ChatWritesEnabled = oldWrites; settings.ChatCommandsEnabled = oldCommands; args.Cancel = true; error.Text = ex.Message; error.Visibility = Visibility.Visible; }
             };
             await dialog.ShowAsync();
         }
@@ -557,6 +595,7 @@ public sealed partial class MainWindow
             }
             Notice.IsOpen = false;
             using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(30)); chatCancellation = cancellation;
+            streamingProgress = null;
             UpdateChatControls(); RenderConversation(); RefreshSessions();
             followChat = true; ScrollChatToEnd();
             PageTitle.Text = session.Title; AppTitleBar.Subtitle = session.Title;
@@ -564,11 +603,12 @@ public sealed partial class MainWindow
             var progress = new Progress<ChatProgress>(update => {
                 if (closing || chatCancellation != cancellation) return;
                 if (update.ContextTokens is { } contextTokens) { session.ContextTokens = contextTokens; UpdateChatStatus(); }
-                if (streamingText != null) streamingText.Content = RenderMarkdown(update.Text);
+                streamingProgress = update;
+                if (streamingText != null) streamingText.Content = RenderStreamingProgress();
                 SetChatActivity(update.Activity == "完了" ? "" : update.Activity);
                 ScrollChatToEnd();
             });
-            var tools = new ChatTools(session.Workspace, settings.ChatWebEnabled, settings.ChatWritesEnabled);
+            var tools = new ChatTools(session.Workspace, settings.ChatWebEnabled, settings.ChatWritesEnabled, allowCommands: settings.ChatCommandsEnabled);
             var reasoningEffort = settings.ChatReasoningEffort;
             // Generation owns a separate transcript; the UI receives stable snapshots.
             generationSession = new ChatSession { Id = session.Id, Title = session.Title, Workspace = session.Workspace,
@@ -577,7 +617,7 @@ public sealed partial class MainWindow
                 chatStore.Save(generationSession);
                 var snapshot = generationSession.Messages.Select(m => (JsonObject)m.DeepClone()).ToList();
                 var contextTokens = generationSession.ContextTokens;
-                DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.ContextTokens = contextTokens; session.UpdatedAt = generationSession.UpdatedAt; RenderConversation(); } });
+                DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.ContextTokens = contextTokens; session.UpdatedAt = generationSession.UpdatedAt; streamingProgress = null; RenderConversation(); } });
             }, cancellation.Token, reasoningEffort));
             cancellation.Token.ThrowIfCancellationRequested();
             SetChatActivity("");
@@ -589,6 +629,7 @@ public sealed partial class MainWindow
         {
             if (generationSession != null) { session.Messages = generationSession.Messages; session.ContextTokens = generationSession.ContextTokens; session.UpdatedAt = generationSession.UpdatedAt; }
             chatCancellation = null;
+            streamingProgress = null;
             if (!closing) UpdateChatSpinner();
             if (!closing) { UpdateChatControls(); RenderConversation(); RefreshSessions(); }
             activeChatTurn = null; completion.TrySetResult();

@@ -20,7 +20,9 @@ public sealed class Settings
     public int WebPort { get; set; } = 3000;
     public bool ChatWebEnabled { get; set; } = true;
     public bool ChatWritesEnabled { get; set; } = true;
+    public bool ChatCommandsEnabled { get; set; } = true;
     public string ChatReasoningEffort { get; set; } = "xhigh";
+    public bool ChatShowReasoning { get; set; } = true;
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LocalLlmGui");
     public static Settings Load()
     {
