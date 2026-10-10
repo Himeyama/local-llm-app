@@ -120,6 +120,9 @@ try
     Assert(Settings.ResolveRoot(isolated) == isolated, "Published GUI must not search parent launchers");
     var oldSettings = System.Text.Json.JsonSerializer.Deserialize<Settings>("{\"RepositoryRoot\":\"C:/external\",\"Threads\":8}")!;
     Assert(oldSettings.RepositoryRoot != "C:/external" && oldSettings.Threads == 8, "Legacy external root must be ignored without losing preferences");
+    Assert(!oldSettings.ServerLanAccess, "Existing settings must default to loopback access");
+    var lanSettings = System.Text.Json.JsonSerializer.Deserialize<Settings>(System.Text.Json.JsonSerializer.Serialize(new Settings { ServerLanAccess = true }))!;
+    Assert(lanSettings.ServerLanAccess, "LAN access preference must survive serialization");
     Console.WriteLine("PASS: independent root resolution and legacy settings migration");
     var serverLauncher = Path.Combine(root, "Start-LlamaServer.ps1");
     File.Copy(Path.Combine(repository!.FullName, "Start-LlamaServer.ps1"), serverLauncher, true);
@@ -135,6 +138,16 @@ try
     Assert(logs.Any(s => s.Contains("MOCK-SERVER-OK") && s.Contains("--host 127.0.0.1") && s.Contains("--alias model") && s.Contains("-c 131072")), "Default executable resolution and model-relative arguments must reach the mock server");
     Assert(logs.Any(s => s.Contains("[launcher] 終了コード 0")), "Real launcher must succeed with a mock executable");
     Console.WriteLine("PASS: real server launcher in Windows PowerShell with mocked executable; no model loaded");
+    logs.Clear();
+    var lanHarness = Path.Combine(root, "lan-harness.ps1");
+    File.WriteAllText(lanHarness, File.ReadAllText(harness) + " -LanAccess:$LanAccess", new System.Text.UTF8Encoding(true));
+    // Pass the switch through the same argument builder used by the GUI.
+    File.WriteAllText(lanHarness, "param([switch]$LanAccess)\n" + File.ReadAllText(lanHarness), new System.Text.UTF8Encoding(true));
+    runner.Start("lan-launcher", ProcessRunner.PowerShell, root, ProcessRunner.ScriptArguments(lanHarness, new Dictionary<string, string?> { ["LanAccess"] = null }));
+    await Wait(() => logs.Any(s => s.Contains("[lan-launcher] 終了コード")));
+    Assert(logs.Any(s => s.Contains("MOCK-SERVER-OK") && s.Contains("--host 0.0.0.0") && s.Contains("--port 9931")), "LAN switch must bind to all IPv4 interfaces on the existing port");
+    Assert(logs.Any(s => s.Contains("[lan-launcher] 終了コード 0")), "LAN launcher must succeed with a mock executable");
+    Console.WriteLine("PASS: LAN launcher switch and persisted preference; no model loaded");
     logs.Clear();
     var absoluteHarness = File.ReadAllText(harness).Replace("-ModelPath model.gguf -MmprojPath mmproj.gguf -ServerExe 'fake server.cmd'",
         "-ModelPath (Join-Path $PSScriptRoot 'model.gguf') -MmprojPath (Join-Path $PSScriptRoot 'mmproj.gguf') -ServerExe (Join-Path $PSScriptRoot 'fake server.cmd')");

@@ -16,6 +16,7 @@ public sealed class Settings
     public int ContextSize { get; set; } = 131072;
     public int Threads { get; set; } = 12;
     public int MtpDraftTokens { get; set; } = 2;
+    public bool ServerLanAccess { get; set; } = false;
     public string CliWorkingDirectory { get; set; } = "";
     public int WebPort { get; set; } = 3000;
     public bool ChatWebEnabled { get; set; } = true;

@@ -156,15 +156,82 @@ public sealed partial class MainWindow : Window
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(box, label);
         Form.Children.Add(box); return box;
     }
+    private StackPanel? settingGroup;
+    private void BeginSettingGroup()
+    {
+        var group = (Border)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<Border xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Background='{ThemeResource CardBackgroundFillColorDefaultBrush}' BorderBrush='{ThemeResource CardStrokeColorDefaultBrush}' BorderThickness='1' CornerRadius='8' HorizontalAlignment='Stretch' />");
+        settingGroup = new StackPanel { Spacing = 0 };
+        group.Child = settingGroup;
+        Form.Children.Add(group);
+    }
+    private T SettingCard<T>(string title, string description, T control) where T : FrameworkElement
+    {
+        Form.Children.Remove(control);
+        if (control is TextBox text) text.Header = null;
+        if (control is NumberBox number) number.Header = null;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(control, title);
+        var card = (Border)Microsoft.UI.Xaml.Markup.XamlReader.Load(
+            "<Border xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' BorderBrush='{ThemeResource CardStrokeColorDefaultBrush}' BorderThickness='0' Padding='20,14' MinHeight='64' HorizontalAlignment='Stretch' />");
+        var layout = new Grid { ColumnSpacing = 24 };
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var label = new StackPanel { Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+        label.Children.Add(new TextBlock { Text = title, FontSize = 16, TextWrapping = TextWrapping.Wrap });
+        if (!string.IsNullOrEmpty(description))
+            label.Children.Add(new TextBlock { Text = description, FontSize = 12, Opacity = 0.65, TextWrapping = TextWrapping.Wrap });
+        control.VerticalAlignment = VerticalAlignment.Center;
+        FrameworkElement editor = control;
+        if (control is ToggleSwitch toggle)
+        {
+            toggle.MinWidth = 0;
+            toggle.OnContent = null;
+            toggle.OffContent = null;
+            toggle.Width = 40;
+            var state = new TextBlock { Text = toggle.IsOn ? "オン" : "オフ", VerticalAlignment = VerticalAlignment.Center };
+            toggle.Toggled += (_, _) => state.Text = toggle.IsOn ? "オン" : "オフ";
+            var togglePanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, VerticalAlignment = VerticalAlignment.Center };
+            togglePanel.Children.Add(state);
+            togglePanel.Children.Add(toggle);
+            editor = togglePanel;
+        }
+        layout.Children.Add(label);
+        layout.Children.Add(editor);
+        card.Child = layout;
+        void Arrange(double width)
+        {
+            if (!double.IsFinite(width)) width = 920;
+            var compact = width < 680;
+            Grid.SetColumn(editor, compact ? 0 : 1);
+            Grid.SetRow(editor, compact ? 1 : 0);
+            layout.RowSpacing = compact ? 12 : 0;
+            editor.HorizontalAlignment = compact ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+            var available = Math.Max(0, width - 40);
+            editor.Width = control is ToggleSwitch or Microsoft.UI.Xaml.Controls.Button ? double.NaN : Math.Min(control is NumberBox ? 180 : compact ? available : Math.Min(600, available * 0.55), available);
+            editor.MaxWidth = available;
+        }
+        card.SizeChanged += (_, args) => Arrange(args.NewSize.Width);
+        Arrange(Form.Width);
+        if (settingGroup == null) BeginSettingGroup();
+        if (settingGroup!.Children.LastOrDefault() is Border previous) previous.BorderThickness = new Thickness(0, 0, 0, 1);
+        settingGroup.Children.Add(card);
+        return control;
+    }
     private static int Read(NumberBox box)
     {
         if (double.IsNaN(box.Value) || box.Value != Math.Truncate(box.Value) || box.Value < box.Minimum || box.Value > box.Maximum)
-            throw new ArgumentException($"{(box.Header as TextBlock)?.Text} に範囲内の整数を指定してください。");
+            throw new ArgumentException($"{(box.Header as TextBlock)?.Text ?? Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(box)} に範囲内の整数を指定してください。");
         return checked((int)box.Value);
     }
     private void OnFormSizeChanged(object sender, SizeChangedEventArgs args)
     {
-        Form.Width = Math.Max(0, Math.Min(920, args.NewSize.Width - 16));
+        ResizeForm(args.NewSize.Width);
+    }
+    private void ResizeForm(double width)
+    {
+        Form.Width = Math.Max(0, page is "server" or "cli" ? width - 12 : Math.Min(920, width - 16));
         foreach (var number in Form.Children.OfType<NumberBox>()) number.Width = Math.Min(280, Form.Width);
     }
 
@@ -186,6 +253,9 @@ public sealed partial class MainWindow : Window
         serverLaunchInputs = Array.Empty<TextBox>();
         cliButtons = Array.Empty<Button>();
         Form.Children.Clear();
+        settingGroup = null;
+        Form.Spacing = 16;
+        ResizeForm(FormScroll.ActualWidth);
         FormScroll.Visibility = page is "web" or "logs" or "chat" ? Visibility.Collapsed : Visibility.Visible;
         WebPanel.Visibility = page == "web" ? Visibility.Visible : Visibility.Collapsed;
         LogView.Visibility = page == "logs" ? Visibility.Visible : Visibility.Collapsed;
@@ -195,12 +265,20 @@ public sealed partial class MainWindow : Window
         {
             case "web": _ = EnsureBrowserAsync(); break;
             case "server":
-                var context = Number("コンテキスト長", settings.ContextSize, 65536, 1000000);
-                var threads = Number("CPU スレッド", settings.Threads, 1, 512);
-                var mtp = Number("MTP draft tokens（無効: 0）", settings.MtpDraftTokens, 0, 16);
-                var model = Input("モデルの絶対パス", AssetPath(settings.ModelPath, Settings.DefaultModelPath));
-                var mmproj = Input("対応する mmproj の絶対パス", AssetPath(settings.MmprojPath, Settings.DefaultMmprojPath));
-                var exe = Input("llama-server.exe の絶対パス", AssetPath(settings.ServerExe, Settings.DefaultServerExe));
+                var lanAccess = SettingCard("LAN に公開", "LAN 内の端末からこの PC の IP アドレス:9931 に接続できます。変更は自動保存され、次回起動時に反映されます。",
+                    new ToggleSwitch { OnContent = "オン", OffContent = "オフ", IsOn = settings.ServerLanAccess });
+                lanAccess.Toggled += (_, _) => Execute(() => {
+                    settings.ServerLanAccess = lanAccess.IsOn;
+                    settings.Save();
+                });
+                BeginSettingGroup();
+                var context = SettingCard("コンテキスト長", "65,536 ～ 1,000,000。Claude で使用する場合は 100,000 以上。", Number("コンテキスト長", settings.ContextSize, 65536, 1000000));
+                var threads = SettingCard("CPU スレッド", "処理に使用する CPU スレッド数。", Number("CPU スレッド", settings.Threads, 1, 512));
+                var mtp = SettingCard("MTP draft tokens", "0 にすると無効になります。", Number("MTP draft tokens", settings.MtpDraftTokens, 0, 16));
+                BeginSettingGroup();
+                var model = SettingCard("モデル", "GGUF モデルの絶対パス。", Input("モデルの絶対パス", AssetPath(settings.ModelPath, Settings.DefaultModelPath)));
+                var mmproj = SettingCard("画像入力用 mmproj", "モデルに対応する mmproj の絶対パス。", Input("対応する mmproj の絶対パス", AssetPath(settings.MmprojPath, Settings.DefaultMmprojPath)));
+                var exe = SettingCard("llama-server.exe", "実行ファイルの絶対パス。", Input("llama-server.exe の絶対パス", AssetPath(settings.ServerExe, Settings.DefaultServerExe)));
                 serverLaunchInputs = new[] { model, mmproj, exe };
                 saveServerSettings = () => {
                     var contextValue = Read(context); var threadsValue = Read(threads); var mtpValue = Read(mtp);
@@ -216,11 +294,26 @@ public sealed partial class MainWindow : Window
                 break;
             case "cli":
                 var workingDirectory = Input("作業ディレクトリ", string.IsNullOrWhiteSpace(settings.CliWorkingDirectory) ? settings.RepositoryRoot : settings.CliWorkingDirectory);
-                Button("フォルダーを選択", () => _ = PickCliDirectoryAsync(workingDirectory));
-                var capture = new CheckBox { Content = "mitmweb で通信をキャプチャー" }; Form.Children.Add(capture);
+                Form.Children.Remove(workingDirectory);
+                workingDirectory.Header = null;
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(workingDirectory, "作業ディレクトリ");
+                var directoryEditor = new Grid { ColumnSpacing = 8 };
+                directoryEditor.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                directoryEditor.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var pickDirectory = Button("参照", () => _ = PickCliDirectoryAsync(workingDirectory));
+                Form.Children.Remove(pickDirectory);
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(pickDirectory, "作業フォルダーを選択");
+                ToolTipService.SetToolTip(pickDirectory, "フォルダーを選択");
+                pickDirectory.VerticalAlignment = VerticalAlignment.Center;
+                Grid.SetColumn(pickDirectory, 1);
+                directoryEditor.Children.Add(workingDirectory);
+                directoryEditor.Children.Add(pickDirectory);
+                SettingCard("作業ディレクトリ", "CLI を開くフォルダー。選択時と起動時に保存されます。", directoryEditor);
+                var capture = SettingCard("通信キャプチャー", "次回 CLI 起動時に mitmweb で通信をキャプチャーします。", new ToggleSwitch());
+                BeginSettingGroup();
                 cliButtons = new[] {
-                    Button("Claude Code を開く", () => OpenCli("Start-LocalClaude.ps1", capture.IsChecked == true, workingDirectory.Text)),
-                    Button("Codex CLI を開く", () => OpenCli("Start-LocalCodex.ps1", capture.IsChecked == true, workingDirectory.Text))
+                    SettingCard("Claude Code", "llama-server に接続して Windows Terminal で開きます。", Button("Claude Code を開く", () => OpenCli("Start-LocalClaude.ps1", capture.IsOn, workingDirectory.Text))),
+                    SettingCard("Codex CLI", "llama-server に接続して Windows Terminal で開きます。", Button("Codex CLI を開く", () => OpenCli("Start-LocalCodex.ps1", capture.IsOn, workingDirectory.Text)))
                 };
                 foreach (var button in cliButtons) button.IsEnabled = serverStatus.IsConnected;
                 break;
@@ -243,6 +336,8 @@ public sealed partial class MainWindow : Window
         args["ContextSize"] = settings.ContextSize.ToString(CultureInfo.InvariantCulture);
         args["Threads"] = settings.Threads.ToString(CultureInfo.InvariantCulture);
         args["MtpDraftTokens"] = settings.MtpDraftTokens.ToString(CultureInfo.InvariantCulture);
+        if (settings.ServerLanAccess) args["LanAccess"] = null;
+        else args.Remove("LanAccess");
         serverStatus.Begin(); UpdateStatus();
         try { StartScript("llama-server", "Start-LlamaServer.ps1", args); }
         catch { serverStatus.Failed(); UpdateStatus(); throw; }

@@ -15,6 +15,9 @@ client can provide the user interface.
 .\Start-LlamaServer.ps1 -MtpDraftTokens 0
 
 .EXAMPLE
+.\Start-LlamaServer.ps1 -LanAccess
+
+.EXAMPLE
 .\Start-LlamaServer.ps1 -ModelPath 'models\Qwen3.8-27B-Uncensored\Qwen3.8-27B-Uncensored-Q4_K_M.gguf'
 
 .EXAMPLE
@@ -43,6 +46,8 @@ param(
     [string]$MmprojPath = 'models\Qwen3.8-27B-Uncensored\mmproj-Qwen3.8-27B-Uncensored-F16.gguf',
 
     [string]$ServerExe,
+
+    [switch]$LanAccess,
 
     [switch]$Help,
 
@@ -92,11 +97,12 @@ if (-not (Test-Path -LiteralPath $mmprojPath -PathType Leaf)) {
     Write-Error "画像入力用 mmproj が見つかりません: $mmprojPath"
     exit 1
 }
-if (Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort 9931 -State Listen -ErrorAction SilentlyContinue) {
+if (Get-NetTCPConnection -LocalPort 9931 -State Listen -ErrorAction SilentlyContinue) {
     Write-Error 'ポート 9931 は既に使用中です。既存の llama-server を停止してから実行してください。'
     exit 1
 }
 
+$listenAddress = if ($LanAccess) { '0.0.0.0' } else { '127.0.0.1' }
 $serverArgs = @(
     '-m', $modelPath,
     '--mmproj', $mmprojPath,
@@ -116,7 +122,7 @@ $serverArgs = @(
     '--reasoning-effort', 'xhigh',
     '-t', [string]$Threads,
     '-tb', [string]$Threads,
-    '--host', '127.0.0.1',
+    '--host', $listenAddress,
     '--port', '9931',
     '--cors-origins', 'localhost',
     # OpenWebUI and Claude Code use the OpenAI-compatible API directly.
@@ -135,6 +141,6 @@ if ($MtpDraftTokens -gt 0) {
     )
 }
 
-Write-Host "ROCm llama-server を起動します（コンテキスト: $ContextSize / threads: $Threads / MTP draft: $MtpDraftTokens / reasoning: xhigh / webui: off）..." -ForegroundColor Cyan
+Write-Host "ROCm llama-server を起動します（コンテキスト: $ContextSize / threads: $Threads / MTP draft: $MtpDraftTokens / host: $listenAddress / reasoning: xhigh / webui: off）..." -ForegroundColor Cyan
 & $ServerExe @serverArgs
 exit $LASTEXITCODE
