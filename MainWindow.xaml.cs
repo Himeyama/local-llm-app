@@ -28,6 +28,11 @@ public sealed partial class MainWindow : Window
     private Action? saveServerSettings;
     private TextBox[] serverLaunchInputs = Array.Empty<TextBox>();
     private Button[] cliButtons = Array.Empty<Button>();
+    private bool activeServerLanAccess, codexLanStartAttempted, codexLanReady;
+    private string codexLanError = "", lanModel = "";
+    private TextBlock? codexLanStatus;
+    private ComboBox? codexLanAddress;
+    private Button? copyCodexLanCommand, retryCodexLanProxy;
     private bool ServerActive => serverStatus.IsConnected || serverStatus.IsStarting || runner.IsRunning("llama-server");
     private string WebUrl => $"http://127.0.0.1:{settings.WebPort}";
 
@@ -38,6 +43,7 @@ public sealed partial class MainWindow : Window
         InitializeWindowChrome();
         ResizeInitialWindow();
         try { settings = Settings.Load(); } catch (Exception e) { ShowError("設定ファイルを読み込めません: " + e.Message); }
+        activeServerLanAccess = settings.ServerLanAccess;
         runner.Log += message => DispatcherQueue.TryEnqueue(() => {
             AddLog(message);
             if (message.StartsWith("[llama-server] ", StringComparison.Ordinal)) { serverStatus.ObserveLog(message); UpdateStatus(); }
@@ -45,8 +51,12 @@ public sealed partial class MainWindow : Window
         });
         runner.Exited += (name, code, stopRequested) => DispatcherQueue.TryEnqueue(() => {
             if (closing) return;
-            if (name == "llama-server") serverStatus.Finish(code, stopRequested);
+            if (name == "llama-server") { serverStatus.Finish(code, stopRequested); StopCodexLanProxy(); }
             else if (name == "Open WebUI") { webStatus.Finish(code, stopRequested); loadedPort = 0; }
+            else if (name == CodexLanConnection.ProcessName) {
+                codexLanReady = false;
+                if (!stopRequested) codexLanError = "LAN 接続を起動できませんでした。ログを確認して再試行してください。";
+            }
             else return;
             UpdateStatus();
             if (code != 0 && !stopRequested) ShowError($"{name} が終了しました（コード {code}）。ログを確認してください。");
@@ -252,6 +262,7 @@ public sealed partial class MainWindow : Window
         ServerCommandBar.Visibility = page == "server" ? Visibility.Visible : Visibility.Collapsed;
         serverLaunchInputs = Array.Empty<TextBox>();
         cliButtons = Array.Empty<Button>();
+        codexLanStatus = null; codexLanAddress = null; copyCodexLanCommand = null; retryCodexLanProxy = null;
         Form.Children.Clear();
         settingGroup = null;
         Form.Spacing = 16;
@@ -265,11 +276,12 @@ public sealed partial class MainWindow : Window
         {
             case "web": _ = EnsureBrowserAsync(); break;
             case "server":
-                var lanAccess = SettingCard("LAN に公開", "LAN 内の端末からこの PC の IP アドレス:9931 に接続できます。変更は自動保存され、次回起動時に反映されます。",
+                var lanAccess = SettingCard("LAN に公開", "LAN 内で llama-server と Codex を利用できます。変更は自動保存され、次回起動時に反映されます。",
                     new ToggleSwitch { OnContent = "オン", OffContent = "オフ", IsOn = settings.ServerLanAccess });
                 lanAccess.Toggled += (_, _) => Execute(() => {
                     settings.ServerLanAccess = lanAccess.IsOn;
                     settings.Save();
+                    UpdateCodexLanControls();
                 });
                 BeginSettingGroup();
                 var context = SettingCard("コンテキスト長", "65,536 ～ 1,000,000。Claude で使用する場合は 100,000 以上。", Number("コンテキスト長", settings.ContextSize, 65536, 1000000));
@@ -316,6 +328,23 @@ public sealed partial class MainWindow : Window
                     SettingCard("Codex CLI", "llama-server に接続して Windows Terminal で開きます。", Button("Codex CLI を開く", () => OpenCli("Start-LocalCodex.ps1", capture.IsOn, workingDirectory.Text)))
                 };
                 foreach (var button in cliButtons) button.IsEnabled = serverStatus.IsConnected;
+                BeginSettingGroup();
+                codexLanStatus = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right, TextAlignment = TextAlignment.Right };
+                var lanState = new Grid { ColumnSpacing = 12 };
+                lanState.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                lanState.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                retryCodexLanProxy = Button("再試行", () => { codexLanStartAttempted = false; codexLanError = ""; EnsureCodexLanProxy(); UpdateCodexLanControls(); });
+                Form.Children.Remove(retryCodexLanProxy);
+                Grid.SetColumn(retryCodexLanProxy, 1);
+                lanState.Children.Add(codexLanStatus); lanState.Children.Add(retryCodexLanProxy);
+                SettingCard("Codex の LAN 接続", "llama-server 設定の「LAN に公開」をオンにして起動してください。", lanState);
+                var lanUrls = CodexLanConnection.BaseUrls();
+                codexLanAddress = new ComboBox { ItemsSource = lanUrls, HorizontalAlignment = HorizontalAlignment.Stretch };
+                codexLanAddress.SelectedIndex = lanUrls.Length > 0 ? 0 : -1;
+                codexLanAddress.SelectionChanged += (_, _) => UpdateCodexLanControls();
+                SettingCard("接続先", "別 PC から接続できる IP アドレスを選択します。TCP 8087 を使用します。", codexLanAddress);
+                copyCodexLanCommand = SettingCard("別 PC 用の起動コマンド", "別 PC の Bash で、操作したいフォルダーから実行してください。", Button("コマンドをコピー", CopyCodexLanCommand));
+                UpdateCodexLanControls();
                 break;
             case "logs": LogView.Text = string.Join(Environment.NewLine, logs); break;
         }
@@ -324,7 +353,7 @@ public sealed partial class MainWindow : Window
         Environment.ExpandEnvironmentVariables(string.IsNullOrWhiteSpace(path) ? defaultPath : path.Trim()), settings.RepositoryRoot);
     private void OnSaveServerSettings(object sender, RoutedEventArgs e) => Execute(() => saveServerSettings?.Invoke());
     private void OnToggleServer(object sender, RoutedEventArgs e) => Execute(() => {
-        if (runner.IsRunning("llama-server")) { runner.Stop("llama-server"); return; }
+        if (runner.IsRunning("llama-server")) { StopCodexLanProxy(); runner.Stop("llama-server"); return; }
         if (ServerActive) return;
         saveServerSettings?.Invoke();
         StartServer(new() { ["ModelPath"] = settings.ModelPath, ["MmprojPath"] = settings.MmprojPath, ["ServerExe"] = settings.ServerExe });
@@ -338,6 +367,8 @@ public sealed partial class MainWindow : Window
         args["MtpDraftTokens"] = settings.MtpDraftTokens.ToString(CultureInfo.InvariantCulture);
         if (settings.ServerLanAccess) args["LanAccess"] = null;
         else args.Remove("LanAccess");
+        StopCodexLanProxy();
+        activeServerLanAccess = settings.ServerLanAccess;
         serverStatus.Begin(); UpdateStatus();
         try { StartScript("llama-server", "Start-LlamaServer.ps1", args); }
         catch { serverStatus.Failed(); UpdateStatus(); throw; }
@@ -366,6 +397,7 @@ public sealed partial class MainWindow : Window
         foreach (var button in cliButtons) button.IsEnabled = serverStatus.IsConnected;
         UpdateWebControls();
         UpdateChatControls();
+        UpdateCodexLanControls();
         SetConnectionStatus(LlamaStatusPrefix, LlamaStatusState, LlamaStatusDetail, "llama-server", serverStatus.Spinner, serverStatus.Message);
         SetConnectionStatus(WebStatusPrefix, WebStatusState, WebStatusDetail, "Open WebUI", webStatus.Spinner, webStatus.Message);
         var starting = serverStatus.IsStarting || webStatus.IsStarting;
@@ -400,6 +432,41 @@ public sealed partial class MainWindow : Window
         webStatus.Begin(); loadedPort = 0; UpdateStatus();
         try { StartScript("Open WebUI", "Start-OpenWebUI.ps1", new() { ["Port"] = settings.WebPort.ToString(CultureInfo.InvariantCulture) }); }
         catch { webStatus.Failed(); UpdateStatus(); throw; }
+    }
+    private void EnsureCodexLanProxy()
+    {
+        if (closing || !serverStatus.IsConnected || !activeServerLanAccess || codexLanStartAttempted || runner.IsRunning(CodexLanConnection.ProcessName)) return;
+        codexLanStartAttempted = true;
+        try { StartScript(CodexLanConnection.ProcessName, Path.Combine("Cli", "Start-CodexLanProxy.ps1")); }
+        catch (Exception e) { codexLanError = e.Message; ShowError("Codex の LAN 接続を起動できません: " + e.Message); }
+    }
+    private void StopCodexLanProxy()
+    {
+        runner.Stop(CodexLanConnection.ProcessName);
+        codexLanReady = false; codexLanStartAttempted = false; codexLanError = "";
+    }
+    private void UpdateCodexLanControls()
+    {
+        if (codexLanStatus != null)
+        {
+            codexLanStatus.Text = !serverStatus.IsConnected ? "サーバーの起動待ち"
+                : !activeServerLanAccess ? (settings.ServerLanAccess ? "サーバーを再起動すると LAN 接続が有効になります。" : "LAN に公開はオフです。")
+                : codexLanError.Length > 0 ? codexLanError
+                : codexLanReady ? "接続可能" : "LAN 接続を準備しています…";
+            var available = codexLanStatus.Text == "接続可能";
+            codexLanStatus.FontWeight = available ? Microsoft.UI.Text.FontWeights.Bold : Microsoft.UI.Text.FontWeights.Normal;
+            if (available) codexLanStatus.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["SystemFillColorSuccessBrush"];
+            else codexLanStatus.ClearValue(TextBlock.ForegroundProperty);
+        }
+        if (copyCodexLanCommand != null) copyCodexLanCommand.IsEnabled = codexLanReady && serverStatus.IsConnected && maximumChatContext is > 0 && lanModel.Length > 0 && codexLanAddress?.SelectedItem is string;
+        if (retryCodexLanProxy != null) retryCodexLanProxy.Visibility = codexLanError.Length > 0 && !runner.IsRunning(CodexLanConnection.ProcessName) ? Visibility.Visible : Visibility.Collapsed;
+    }
+    private void CopyCodexLanCommand()
+    {
+        if (!codexLanReady || codexLanAddress?.SelectedItem is not string url || maximumChatContext is not > 0 || lanModel.Length == 0) return;
+        var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+        package.SetText(CodexLanConnection.BashCommand(url, lanModel, maximumChatContext.Value));
+        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
     }
     private async Task PickCliDirectoryAsync(TextBox input)
     {
@@ -453,7 +520,8 @@ public sealed partial class MainWindow : Window
         try {
             var serverTask = ProbeAsync("http://127.0.0.1:9931/props");
             var webTask = ProbeAsync(WebUrl + "/health");
-            await Task.WhenAll(serverTask, webTask);
+            var proxyTask = ProbeAsync(CodexLanConnection.HealthUrl);
+            await Task.WhenAll(serverTask, webTask, proxyTask);
             if (closing) return;
             var server = await serverTask; var web = await webTask;
             var webJustConnected = web != null && !webStatus.IsConnected;
@@ -464,6 +532,11 @@ public sealed partial class MainWindow : Window
             if (server != null) try { maximumChatContext = ChatContextUsage.Maximum(System.Text.Json.Nodes.JsonNode.Parse(server)); } catch (JsonException) { }
             if (server != null) try { using var props = JsonDocument.Parse(server); if (props.RootElement.TryGetProperty("model_alias", out var alias)) model = alias.GetString() ?? ""; } catch (JsonException) { }
             serverStatus.SetConnection(server != null, model);
+            lanModel = model;
+            if (server != null) {
+                EnsureCodexLanProxy();
+                codexLanReady = activeServerLanAccess && runner.IsRunning(CodexLanConnection.ProcessName) && CodexLanConnection.IsReady(await proxyTask);
+            } else StopCodexLanProxy();
             UpdateStatus();
             if (web != null && (page == "web" || Browser.CoreWebView2 != null)) {
                 var browserAlreadyInitialized = Browser.CoreWebView2 != null;

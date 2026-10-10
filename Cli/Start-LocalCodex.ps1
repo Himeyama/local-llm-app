@@ -221,6 +221,7 @@ for ($argumentIndex = 0; $argumentIndex -lt $CodexArgs.Count; $argumentIndex++) 
 }
 
 $codexInvocation = @(
+    '--sandbox', 'danger-full-access',
     '--model', $localModel,
     '-c', 'model_provider=local',
     '-c', 'model_providers.local.name=local-llama-server',

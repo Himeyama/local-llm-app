@@ -6,4 +6,5 @@
   <ItemGroup><Compile Include="../Services/ServerStartupStatus.cs" Link="ServerStartupStatus.cs" /></ItemGroup>
   <ItemGroup><Compile Include="../Services/WebStartupStatus.cs" Link="WebStartupStatus.cs" /></ItemGroup>
   <ItemGroup><Compile Include="../Services/Settings.cs" Link="Settings.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../Services/CodexLanConnection.cs" Link="CodexLanConnection.cs" /></ItemGroup>
 </Project>

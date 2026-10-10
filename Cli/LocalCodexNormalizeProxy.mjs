@@ -4,10 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeTools, restoreSseEvent, restoreToolCalls } from './CodexResponsesTools.mjs';
 
-const listenHost = '127.0.0.1';
-const listenPort = 8084;
-const upstream = 'http://127.0.0.1:9931';
-const proxyCapabilities = { status: 'ok', visionPassthrough: true, toolCompatibility: 1, upstream };
+const listenHost = process.env.LOCAL_CODEX_PROXY_HOST || '127.0.0.1';
+const listenPort = Number(process.env.LOCAL_CODEX_PROXY_PORT || 8084);
+const upstream = (process.env.LOCAL_LLAMA_SERVER_URL || 'http://127.0.0.1:9931').replace(/\/$/, '');
+const proxyCapabilities = { status: 'ok', visionPassthrough: true, toolCompatibility: 1, upstream, listenHost, listenPort };
 const debugLogPath = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   'LocalCodexNormalizeProxy.debug.log',

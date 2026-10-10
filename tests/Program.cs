@@ -81,6 +81,16 @@ webStartup.Begin(); webStartup.Finish(-1, stopRequested: true);
 Assert(!webStartup.IsStarting && !webStartup.IsConnected && webStartup.Message == "未接続", "Requested WebUI stop must not show an exit error");
 Console.WriteLine("PASS: WebUI spinner, startup phases, readiness, disconnect, failure and stop");
 
+var readyLanHealth = "{\"status\":\"ok\",\"visionPassthrough\":true,\"toolCompatibility\":1,\"upstream\":\"http://127.0.0.1:9931\",\"listenHost\":\"0.0.0.0\",\"listenPort\":8087}";
+Assert(CodexLanConnection.IsReady(readyLanHealth), "Correct LAN proxy must be accepted");
+Assert(!CodexLanConnection.IsReady(readyLanHealth.Replace("0.0.0.0", "127.0.0.1")), "Loopback-only proxy cannot be reported as LAN-ready");
+Assert(!CodexLanConnection.IsReady(readyLanHealth.Replace("9931", "9999")), "Proxy for another backend cannot be reported as ready");
+Assert(!CodexLanConnection.IsReady("{}") && !CodexLanConnection.IsReady("invalid") && !CodexLanConnection.IsReady(null), "Missing or malformed health must fail closed");
+var lanCommand = CodexLanConnection.BashCommand("http://172.29.96.1:8087/v1", "Qwen3.8-27B-Uncensored-Q4_K_M", 131072);
+Assert(lanCommand.Contains("http://172.29.96.1:8087/v1") && !lanCommand.Contains(":9931") && lanCommand.Contains("model_context_window=131072") && lanCommand.Contains("responses"), "Copied command must use the compatibility endpoint and actual context size");
+Assert(lanCommand.Contains("--sandbox danger-full-access"), "Copied Codex command must disable the sandbox as configured for CLI startup");
+Console.WriteLine("PASS: LAN health checks and remote Codex command");
+
 var root = Path.Combine(Path.GetTempPath(), "LocalLlmGui-tests-" + Guid.NewGuid());
 Directory.CreateDirectory(root);
 try
@@ -156,6 +166,27 @@ try
     await Wait(() => logs.Any(s => s.Contains("[absolute-launcher] 終了コード")));
     Assert(logs.Any(s => s.Contains("MOCK-SERVER-OK") && s.Contains(Path.Combine(root, "model.gguf"))) && logs.Any(s => s.Contains("[absolute-launcher] 終了コード 0")), "Absolute asset paths must reach the server without joining the repository prefix");
     Console.WriteLine("PASS: absolute model, mmproj and executable paths; no model loaded");
+
+    var freePort = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    freePort.Start();
+    var proxyPort = ((System.Net.IPEndPoint)freePort.LocalEndpoint).Port;
+    freePort.Stop();
+    runner.Start("lan-proxy", ProcessRunner.PowerShell, repository.FullName,
+        ProcessRunner.ScriptArguments(Path.Combine(repository.FullName, "Cli", "Start-CodexLanProxy.ps1"), new Dictionary<string, string?> { ["Port"] = proxyPort.ToString() }));
+    await Wait(() => logs.Any(s => s.Contains($"http://0.0.0.0:{proxyPort}")) || exits.Any(e => e.Name == "lan-proxy"));
+    Assert(runner.IsRunning("lan-proxy"), "App-managed LAN proxy must start successfully");
+    using (var proxyClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+    {
+        var health = await proxyClient.GetStringAsync($"http://127.0.0.1:{proxyPort}/health");
+        using var healthDocument = System.Text.Json.JsonDocument.Parse(health);
+        Assert(healthDocument.RootElement.GetProperty("listenHost").GetString() == "0.0.0.0"
+            && healthDocument.RootElement.GetProperty("upstream").GetString() == "http://127.0.0.1:9931", "Launcher must expose LAN and retain the local backend");
+    }
+    runner.Stop("lan-proxy");
+    await Wait(() => exits.Any(e => e.Name == "lan-proxy" && e.StopRequested));
+    freePort = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, proxyPort);
+    freePort.Start(); freePort.Stop();
+    Console.WriteLine("PASS: app-managed Node proxy LAN binding, health and process-tree shutdown");
 
 
     logs.Clear();
