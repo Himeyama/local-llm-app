@@ -215,8 +215,8 @@ public sealed partial class MainWindow
             {
                 if (text.Length > 0) block.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 15,
                     Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White) });
-                var bubble = new Border { Child = block, Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"],
-                    CornerRadius = new CornerRadius(16), Padding = new Thickness(16, 12, 16, 12), HorizontalAlignment = HorizontalAlignment.Right, MaxWidth = ChatScroll.ActualWidth > 0 ? ChatScroll.ActualWidth * 0.8 : 520 };
+                var bubble = new SquircleBubble(block, (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"])
+                    { HorizontalAlignment = HorizontalAlignment.Right, MaxWidth = ChatScroll.ActualWidth > 0 ? ChatScroll.ActualWidth * 0.8 : 520 };
                 ChatMessages.Children.Add(bubble);
             }
             else
@@ -270,7 +270,7 @@ public sealed partial class MainWindow
 
     private void OnChatSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        foreach (var bubble in ChatMessages.Children.OfType<Border>()) bubble.MaxWidth = Math.Max(0, e.NewSize.Width * 0.8);
+        foreach (var bubble in ChatMessages.Children.OfType<SquircleBubble>()) bubble.MaxWidth = Math.Max(0, e.NewSize.Width * 0.8);
     }
 
     private void OnChatViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
