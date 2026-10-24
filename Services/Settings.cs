@@ -24,6 +24,7 @@ public sealed class Settings
     public bool ChatCommandsEnabled { get; set; } = true;
     public string ChatReasoningEffort { get; set; } = "xhigh";
     public bool ChatShowReasoning { get; set; } = true;
+    public bool InvestigationShowReasoning { get; set; } = false;
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LocalLlmGui");
     public static Settings Load()
     {

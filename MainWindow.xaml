@@ -45,7 +45,10 @@
             <Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/>
           </Style>
         </StackPanel.Resources>
-        <ToggleButton Tag="chat" Click="OnMenuClick" ToolTipService.ToolTip="チャット" AutomationProperties.Name="チャット"><SymbolIcon Symbol="Message"/></ToggleButton>
+        <ToggleButton Tag="chat" Click="OnMenuClick" ToolTipService.ToolTip="チャット" AutomationProperties.Name="チャット">
+          <ToggleButton.ContextFlyout><MenuFlyout><MenuFlyoutItem Text="脆弱性診断モード（プロトタイプ）" Click="OnOpenInvestigation"><MenuFlyoutItem.Icon><SymbolIcon Symbol="Permissions"/></MenuFlyoutItem.Icon></MenuFlyoutItem></MenuFlyout></ToggleButton.ContextFlyout>
+          <SymbolIcon Symbol="Message"/>
+        </ToggleButton>
         <ToggleButton Tag="server" Click="OnMenuClick" ToolTipService.ToolTip="llama-server" AutomationProperties.Name="llama-server"><SymbolIcon Symbol="Setting"/></ToggleButton>
         <ToggleButton Tag="web" Click="OnMenuClick" ToolTipService.ToolTip="Open WebUI" AutomationProperties.Name="Open WebUI"><SymbolIcon Symbol="Globe"/></ToggleButton>
         <ToggleButton Tag="cli" Click="OnMenuClick" ToolTipService.ToolTip="Claude / Codex" AutomationProperties.Name="Claude / Codex"><FontIcon Glyph="&#xE756;"/></ToggleButton>
@@ -82,6 +85,61 @@
             <WebView2 x:Name="Browser" Grid.Row="1" Visibility="Collapsed"/>
           </Grid>
           <TextBox x:Name="LogView" Grid.RowSpan="2" Visibility="Collapsed" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Code, Noto Sans JP" Background="Transparent"/>
+          <Grid x:Name="InvestigationPanel" Grid.RowSpan="2" Visibility="Collapsed" RowSpacing="10">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <ComboBox x:Name="InvestigationHistory" PlaceholderText="保存した調査" HorizontalAlignment="Stretch" SelectionChanged="OnInvestigationSelected" AutomationProperties.Name="診断履歴"/>
+              <Button x:Name="NewInvestigationButton" Grid.Column="1" Content="新しい調査" Click="OnNewInvestigation"/>
+            </Grid>
+            <Expander x:Name="InvestigationSettings" Grid.Row="1" Header="対象範囲と実行条件" IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+              <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="10">
+                  <TextBlock Text="HTTP プロトタイプ · 匿名 GET / HEAD · ワーカー2並列 · 自動リダイレクトなし。ブラウザー・シェル・認証操作は未対応です。GETでも状態が変わるURLは除外してください。" TextWrapping="Wrap" Opacity="0.7"/>
+                  <TextBox x:Name="InvestigationTarget" Header="対象URL（同一オリジン・このパス配下のみ）" PlaceholderText="https://your-site.example/app/"/>
+                  <TextBox x:Name="InvestigationExcluded" Header="除外パス（1行に1件）" PlaceholderText="/app/logout&#xA;/app/delete" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="100"/>
+                  <TextBox x:Name="InvestigationRestrictions" Header="追加の許可・禁止事項（プランナーへの指示）" PlaceholderText="例：公開ページと公開APIのみ。フォーム送信・ログイン・購入は禁止。" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="100"/>
+                  <TextBlock Text="実行側で強制する制約：URL範囲・除外パス・GET/HEAD・通信数。自由記述の制約はAIへの指示です。通信本文を含む証拠はローカルに保存されます。" TextWrapping="Wrap" Opacity="0.7"/>
+                  <StackPanel Orientation="Horizontal" Spacing="16">
+                    <NumberBox x:Name="InvestigationRequestLimit" Header="通信上限" Minimum="1" Maximum="100" Value="24" Width="120" SpinButtonPlacementMode="Compact"/>
+                    <NumberBox x:Name="InvestigationRoundLimit" Header="計画回数" Minimum="1" Maximum="10" Value="4" Width="120" SpinButtonPlacementMode="Compact"/>
+                  </StackPanel>
+                  <CheckBox x:Name="InvestigationAuthorized" Content="自分が管理する、または診断の許可を得た対象です"/>
+                </StackPanel>
+              </ScrollViewer>
+            </Expander>
+            <Pivot Grid.Row="2">
+              <PivotItem Header="調査チャット"><ScrollViewer x:Name="InvestigationScroll" VerticalScrollBarVisibility="Auto"><StackPanel Spacing="14" Padding="0,8,12,12"><StackPanel x:Name="InvestigationMessages" Spacing="14"/><TextBlock x:Name="InvestigationLiveReasoning" Visibility="Collapsed" TextWrapping="Wrap" IsTextSelectionEnabled="True" FontSize="13" Opacity="0.6"/></StackPanel></ScrollViewer></PivotItem>
+              <PivotItem Header="検出・再テスト"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="InvestigationFindings" Spacing="12"/></ScrollViewer></PivotItem>
+              <PivotItem Header="通信証拠"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="InvestigationEvidence" Spacing="8"/></ScrollViewer></PivotItem>
+              <PivotItem Header="資産・探索グラフ"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="InvestigationGraph" Spacing="10"/></ScrollViewer></PivotItem>
+            </Pivot>
+            <StackPanel Grid.Row="3" Spacing="8">
+              <TextBlock x:Name="InvestigationStatus" Text="調査目的を入力して開始してください。" TextWrapping="Wrap" Opacity="0.7"/>
+              <Border x:Name="InvestigationComposer" BorderBrush="{ThemeResource TextControlBorderBrush}" Background="{ThemeResource TextControlBackground}" BorderThickness="1" CornerRadius="12">
+                <Grid>
+                  <TextBox x:Name="InvestigationInput" PlaceholderText="調査目的・追加の指示（Ctrl+Enterで開始）" AcceptsReturn="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" CornerRadius="12" Padding="12,12,12,56" MinHeight="120" MaxHeight="240" PreviewKeyDown="OnInvestigationKeyDown" GotFocus="OnInvestigationInputGotFocus" LostFocus="OnInvestigationInputLostFocus">
+                    <TextBox.Resources>
+                      <SolidColorBrush x:Key="TextControlBackground" Color="Transparent"/>
+                      <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent"/>
+                      <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent"/>
+                      <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent"/>
+                      <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent"/>
+                      <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent"/>
+                      <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent"/>
+                      <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent"/>
+                      <Thickness x:Key="TextControlBorderThemeThickness">0</Thickness>
+                      <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
+                    </TextBox.Resources>
+                  </TextBox>
+                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8" Spacing="4">
+                    <ToggleButton x:Name="InvestigationReasoningVisibilityButton" Template="{StaticResource SquircleToggleTemplate}" CornerRadius="8" UseSystemFocusVisuals="True" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnToggleInvestigationReasoningVisibility" IsChecked="False" Width="40" Height="40" Padding="0" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="推論内容を表示する" AutomationProperties.Name="推論内容を表示する"><FontIcon Glyph="&#xE890;"/></ToggleButton>
+                    <Button x:Name="StartInvestigationButton" Click="OnStartInvestigation" Style="{StaticResource AccentButtonStyle}" Width="40" Height="40" Padding="0" CornerRadius="20" BorderThickness="0" ToolTipService.ToolTip="調査を開始・続行" AutomationProperties.Name="調査を開始・続行"><SymbolIcon Symbol="Send"/></Button>
+                    <Button x:Name="StopInvestigationButton" Click="OnStopInvestigation" Width="40" Height="40" Padding="0" CornerRadius="20" Visibility="Collapsed" IsEnabled="False" ToolTipService.ToolTip="診断を停止" AutomationProperties.Name="診断を停止"><SymbolIcon Symbol="Stop"/></Button>
+                  </StackPanel>
+                </Grid>
+              </Border>
+            </StackPanel>
+          </Grid>
           <Grid x:Name="ChatPanel" Grid.RowSpan="2" RowSpacing="12">
             <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" SizeChanged="OnChatSizeChanged" ViewChanged="OnChatViewChanged"><StackPanel x:Name="ChatMessages" Spacing="18" Padding="0,12,12,16"/></ScrollViewer>

@@ -66,6 +66,7 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) => { closing = true; timer.Stop(); spinnerTimer.Stop(); runner.Dispose(); http.Dispose(); Browser.Close(); };
         ready = true;
         InitializeChat();
+        InitializeInvestigation();
         BuildPage();
         timer.Start();
         _ = RefreshStatusAsync();
@@ -254,10 +255,11 @@ public sealed partial class MainWindow : Window
         HistoryPane.Visibility = page == "chat" && historyExpanded ? Visibility.Visible : Visibility.Collapsed;
         AppTitleBar.IsPaneToggleButtonVisible = page == "chat";
         foreach (var menu in MenuRail.Children.OfType<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>()) menu.IsChecked = menu.Tag.ToString() == page;
-        PageTitle.Text = page switch { "chat" => currentChat?.Title ?? "チャット", "server" => "llama-server", "web" => "Open WebUI", "cli" => "Claude / Codex", _ => "ログ" };
+        PageTitle.Text = page switch { "chat" => currentChat?.Title ?? "チャット", "investigation" => "脆弱性診断 · プロトタイプ", "server" => "llama-server", "web" => "Open WebUI", "cli" => "Claude / Codex", _ => "ログ" };
         PageTitle.Visibility = page == "chat" ? Visibility.Collapsed : Visibility.Visible;
         AppTitleBar.Subtitle = PageTitle.Text;
         ChatPanel.Visibility = page == "chat" ? Visibility.Visible : Visibility.Collapsed;
+        InvestigationPanel.Visibility = page == "investigation" ? Visibility.Visible : Visibility.Collapsed;
         saveServerSettings = null;
         ServerCommandBar.Visibility = page == "server" ? Visibility.Visible : Visibility.Collapsed;
         serverLaunchInputs = Array.Empty<TextBox>();
@@ -267,7 +269,7 @@ public sealed partial class MainWindow : Window
         settingGroup = null;
         Form.Spacing = 16;
         ResizeForm(FormScroll.ActualWidth);
-        FormScroll.Visibility = page is "web" or "logs" or "chat" ? Visibility.Collapsed : Visibility.Visible;
+        FormScroll.Visibility = page is "web" or "logs" or "chat" or "investigation" ? Visibility.Collapsed : Visibility.Visible;
         WebPanel.Visibility = page == "web" ? Visibility.Visible : Visibility.Collapsed;
         LogView.Visibility = page == "logs" ? Visibility.Visible : Visibility.Collapsed;
         UpdateWebControls();
