@@ -10,7 +10,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Nullable>enable</Nullable>
-    <DefaultItemExcludes>$(DefaultItemExcludes);runtime/**;models/**;openwebui/**;publish/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);runtime/**;models/**;openwebui/**;publish/**;tests/**</DefaultItemExcludes>
     <ImplicitUsings>enable</ImplicitUsings>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- An unavailable audit feed must not warn on every offline GUI launch.
@@ -19,12 +19,26 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Markdig" Version="1.4.0" />
+    <PackageReference Include="UTF.Unknown" Version="2.7.0" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260317003" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7705" />
     <Compile Remove="tests/**/*.cs" />
-    <Content Include="Start-LlamaServer.ps1;Start-OpenWebUI.ps1;configure_openwebui.py;Setup-OpenWebUI.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Start-LlamaServer.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Cli/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Terminal/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="BuildMonacoEditor" BeforeTargets="PrepareForBuild" Inputs="Editor/package.json;Editor/package-lock.json;Editor/build.mjs;Editor/editor.js;Editor/index.html" Outputs="Editor/dist/.build-stamp">
+    <Exec Command="npm ci --no-audit --no-fund" WorkingDirectory="Editor" Condition="!Exists('Editor/node_modules/esbuild/package.json')" />
+    <Exec Command="npm run build" WorkingDirectory="Editor" />
+  </Target>
+  <Target Name="CopyMonacoRuntime" AfterTargets="Build">
+    <ItemGroup><MonacoRuntime Include="Editor/dist/**/*" /></ItemGroup>
+    <Copy SourceFiles="@(MonacoRuntime)" DestinationFiles="@(MonacoRuntime->'$(OutDir)Editor/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishMonacoRuntime" AfterTargets="Publish">
+    <ItemGroup><MonacoPublishRuntime Include="Editor/dist/**/*" /></ItemGroup>
+    <Copy SourceFiles="@(MonacoPublishRuntime)" DestinationFiles="@(MonacoPublishRuntime->'$(PublishDir)Editor/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
   <!-- Node packages are runtime files, not WinUI resources. -->
   <ItemGroup>
     <BrowserSearchRuntime Include="BrowserSearch/search.mjs;BrowserSearch/package*.json;BrowserSearch/node_modules/**/*" />

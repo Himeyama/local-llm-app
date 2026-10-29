@@ -10,6 +10,11 @@ static async Task Reject(Func<Task> action, string message)
     throw new Exception(message);
 }
 static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
+var displayJson = new JsonObject { ["command"] = "first\nsecond", ["stdout"] = "one\r\ntwo\nthree", ["path"] = @"C:\notes\report.txt" }.ToJsonString();
+var displayedResult = ChatCommandExecution.FormatForDisplay(displayJson);
+Assert(displayedResult.Contains("first\nsecond") && displayedResult.Contains("one\r\ntwo\nthree"), "Command display must render LF and CRLF escapes as line breaks");
+Assert(displayedResult.Contains(@"C:\\notes\\report.txt"), "Command display must preserve literal backslashes in paths");
+Assert(ChatCommandExecution.FormatForDisplay("ツール失敗: invalid") == "ツール失敗: invalid", "Command display must preserve non-JSON errors");
 static string Chunk(JsonObject delta, string? finish = null) => "data: " + new JsonObject { ["choices"] = new JsonArray { new JsonObject { ["delta"] = delta, ["finish_reason"] = finish } } }.ToJsonString() + "\n\n";
 static string Call(int index, string? id, string? name, string fragment) => Chunk(new JsonObject { ["tool_calls"] = new JsonArray { new JsonObject { ["index"] = index, ["id"] = id, ["function"] = new JsonObject { ["name"] = name, ["arguments"] = fragment } } } });
 static string Usage(int prompt, int completion) => "data: " + new JsonObject { ["choices"] = new JsonArray(), ["usage"] = new JsonObject { ["prompt_tokens"] = prompt, ["completion_tokens"] = completion, ["total_tokens"] = prompt + completion, ["prompt_tokens_details"] = new JsonObject { ["cached_tokens"] = prompt / 2 } } }.ToJsonString() + "\n\n";
@@ -79,7 +84,12 @@ try
     var commandTools = new ChatTools(root, false, false, allowCommands: true);
     Assert(commandTools.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "execute_command") && !readonlyTools.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "execute_command"), "Command definition must follow its enable setting");
     await Reject(() => readonlyTools.ExecuteAsync("execute_command", Args("{\"command\":\"Write-Output 'blocked'\"}"), default), "Disabled command execution accepted");
-    var commandResult = JsonNode.Parse(await commandTools.ExecuteAsync("execute_command", new JsonObject { ["command"] = "[Console]::WriteLine('日本語');\n[Console]::WriteLine((Get-Location).Path); [Console]::Error.WriteLine('エラー'); exit 7", ["working_directory"] = "notes" }, default))!;
+    var command = "[Console]::WriteLine('日本語');\n[Console]::WriteLine((Get-Location).Path); [Console]::Error.WriteLine('エラー'); exit 7";
+    var commandJson = await commandTools.ExecuteAsync("execute_command", new JsonObject { ["command"] = command, ["working_directory"] = "notes" }, default);
+    var commandResult = JsonNode.Parse(commandJson)!;
+    Assert(commandResult["command"]!.GetValue<string>() == command, "Command result must include the original multiline command");
+    Assert(commandJson.Contains("日本語") && commandJson.Contains("エラー") && !commandJson.Contains("\\u65E5", StringComparison.OrdinalIgnoreCase), "Command JSON must display Japanese without Unicode escapes");
+    Assert(commandJson.Split('\n').Any(line => line.TrimEnd('\r').StartsWith("  \"stdout\": ")), "Command JSON must be indented across multiple lines");
     Assert(commandResult["exit_code"]!.GetValue<int>() == 7 && commandResult["stdout"]!.GetValue<string>().Contains("日本語") && commandResult["stdout"]!.GetValue<string>().Contains(Path.Combine(root, "notes")) && commandResult["stderr"]!.GetValue<string>().Contains("エラー") && !commandResult["timed_out"]!.GetValue<bool>(), "Commands must preserve multiline scripts, UTF-8 output, working directory, stderr and exit code");
     var nativeResult = JsonNode.Parse(await commandTools.ExecuteAsync("execute_command", Args("{\"command\":\"cmd.exe /c exit 9\"}"), default))!;
     Assert(nativeResult["exit_code"]!.GetValue<int>() == 9, "Native command failure exit code lost");

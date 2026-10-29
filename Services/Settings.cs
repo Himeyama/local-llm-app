@@ -18,13 +18,15 @@ public sealed class Settings
     public int MtpDraftTokens { get; set; } = 2;
     public bool ServerLanAccess { get; set; } = false;
     public string CliWorkingDirectory { get; set; } = "";
-    public int WebPort { get; set; } = 3000;
     public bool ChatWebEnabled { get; set; } = true;
     public bool ChatWritesEnabled { get; set; } = true;
     public bool ChatCommandsEnabled { get; set; } = true;
     public string ChatReasoningEffort { get; set; } = "xhigh";
     public bool ChatShowReasoning { get; set; } = true;
     public bool InvestigationShowReasoning { get; set; } = false;
+    public bool EditorAutoSave { get; set; } = true;
+    public bool EditorWordWrap { get; set; } = true;
+    public string LastChatId { get; set; } = "";
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LocalLlmGui");
     public static Settings Load()
     {

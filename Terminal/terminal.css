@@ -1,0 +1,8 @@
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #111318; color: #e7e9ef; }
+body { font: 12px "Segoe UI", sans-serif; }
+#terminal { position: relative; width: 100%; height: 100%; }
+.terminal-screen { position: absolute; inset: 0; display: none; }
+.terminal-screen.active { display: block; }
+/* Pad the text surface, not the host: the viewport scrollbar reaches both outer edges. */
+.xterm { box-sizing: border-box; height: 100%; padding: 8px 0 0 10px; }
+.xterm .xterm-viewport { scrollbar-width: thin; }

@@ -35,13 +35,14 @@ public sealed partial class MainWindow
 
     private void InitializeChat()
     {
+        RootLayout.Loaded += (_, _) => RestoreConsoleVisibility();
         chatSpinnerTimer.Tick += (_, _) => { chatSpinnerFrame = (chatSpinnerFrame + 1) % ChatSpinnerFrames.Length; ChatActivitySpinner.Text = ChatSpinnerFrames[chatSpinnerFrame].ToString(); };
         try { chatSessions.AddRange(chatStore.Load()); }
         catch (Exception e) { ShowError("履歴を読み込めません: " + e.Message); }
-        currentChat = chatSessions.FirstOrDefault();
+        currentChat = chatSessions.FirstOrDefault(session => session.Id == settings.LastChatId) ?? chatSessions.FirstOrDefault();
         if (currentChat == null) CreateChat();
         else { RefreshSessions(); RenderConversation(); }
-        Closed += (_, _) => { chatSpinnerTimer.Stop(); chatCancellation?.Cancel(); chatHttp.Dispose(); };
+        Closed += (_, _) => { chatSpinnerTimer.Stop(); chatCancellation?.Cancel(); chatHttp.Dispose(); CloseConsoles(); };
     }
 
     private void RefreshSessions()
@@ -116,6 +117,7 @@ public sealed partial class MainWindow
                 PrimaryButtonText = "削除", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Close };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary || closing || chatCancellation != null || handlingChatCommand) return;
             chatStore.Delete(session);
+            RemoveConsole(session.Id);
             chatSessions.Remove(session); drafts.Remove(session.Id); pendingMessages.Remove(session.Id);
             if (currentChat == session)
             {
@@ -145,9 +147,10 @@ public sealed partial class MainWindow
     private void UpdateChatControls()
     {
         UpdateChatStatus();
+        UpdateGitControls();
         if (currentChat == null) return;
         bool busy = chatCancellation != null || handlingChatCommand;
-        SendChatButton.IsEnabled = serverStatus.IsConnected || ChatCommands.Parse(ChatInput.Text) == "clear";
+        SendChatButton.IsEnabled = !gitBusy && (serverStatus.IsConnected || ChatCommands.Parse(ChatInput.Text) == "clear");
         StopChatButton.IsEnabled = chatCancellation != null || chatCommandCancellation != null;
         SendChatButton.Visibility = Visibility.Visible;
         StopChatButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
@@ -173,7 +176,13 @@ public sealed partial class MainWindow
     private void RenderConversation()
     {
         if (closing || currentChat == null) return;
+        if (settings.LastChatId != currentChat.Id) {
+            settings.LastChatId = currentChat.Id;
+            try { settings.Save(); } catch (Exception ex) { ShowError("開いているチャットを記憶できません: " + ex.Message); }
+        }
         UpdateChatStatus();
+        RefreshWorkspaceExplorer();
+        RestoreConsoleVisibility();
         RenderPendingMessages();
         ToolTipService.SetToolTip(ChatWorkspaceButton, "作業フォルダー設定\n" + currentChat.Workspace);
         ChatMessages.Children.Clear(); streamingText = null;
@@ -192,7 +201,9 @@ public sealed partial class MainWindow
                 block.Children.Add(RenderReasoning(reasoning));
             if (role == "tool")
             {
-                var detail = MessageText(message["content"]?.GetValue<string>() ?? "");
+                var result = message["content"]?.GetValue<string>() ?? "";
+                if (message["name"]?.GetValue<string>() == "execute_command") result = ChatCommandExecution.FormatForDisplay(result);
+                var detail = MessageText(result);
                 ChatMessages.Children.Add(new Expander { Header = "ツール: " + message["name"]?.GetValue<string>(), Content = detail, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
                 continue;
             }
@@ -346,6 +357,8 @@ public sealed partial class MainWindow
                     var path = Path.GetFullPath(Environment.ExpandEnvironmentVariables(input.Text.Trim()), settings.RepositoryRoot);
                     if (!Directory.Exists(path)) throw new DirectoryNotFoundException("フォルダーが見つかりません。");
                     session.Workspace = path; chatStore.Save(session);
+                    RefreshWorkspaceExplorer();
+                    RestoreConsoleVisibility();
                     ToolTipService.SetToolTip(ChatWorkspaceButton, "作業フォルダー設定\n" + path);
                 }
                 catch (Exception ex) { session.Workspace = previous; args.Cancel = true; error.Text = ex.Message; error.Visibility = Visibility.Visible; }
@@ -468,7 +481,7 @@ public sealed partial class MainWindow
 
     private async Task SendChatAsync()
     {
-        if (closing || currentChat == null) return;
+        if (closing || gitBusy || currentChat == null) return;
         var text = ChatInput.Text.Trim(); var session = currentChat;
         if (ChatCommands.Parse(text) is { } command) { await RunChatCommandAsync(command, session); return; }
         if (!serverStatus.IsConnected) return;

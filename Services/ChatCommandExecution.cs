@@ -1,11 +1,29 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace LocalLlm.Gui.Services;
 
 internal static class ChatCommandExecution
 {
+    public static string FormatForDisplay(string result)
+    {
+        try
+        {
+            if (JsonNode.Parse(result) is not JsonObject) return result;
+        }
+        catch (JsonException) { return result; }
+        // Match escape pairs so a literal backslash followed by n or r stays intact.
+        return System.Text.RegularExpressions.Regex.Replace(result, @"\\.", match => match.Value switch
+        {
+            @"\r" => "\r",
+            @"\n" => "\n",
+            _ => match.Value
+        });
+    }
+
     public static async Task<string> RunAsync(string command, string directory, int timeoutSeconds, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -40,9 +58,13 @@ internal static class ChatCommandExecution
         }
         ct.ThrowIfCancellationRequested();
         var output = await stdout; var error = await stderr;
-        return new JsonObject { ["working_directory"] = directory, ["exit_code"] = process.ExitCode,
+        return new JsonObject { ["command"] = command, ["working_directory"] = directory, ["exit_code"] = process.ExitCode,
             ["timed_out"] = timeout.IsCancellationRequested, ["stdout"] = output.Text, ["stderr"] = error.Text,
-            ["stdout_truncated"] = output.Truncated, ["stderr_truncated"] = error.Truncated }.ToJsonString();
+            ["stdout_truncated"] = output.Truncated, ["stderr_truncated"] = error.Truncated }.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            });
     }
 
     private static async Task<(string Text, bool Truncated)> CaptureAsync(StreamReader reader, CancellationToken ct)

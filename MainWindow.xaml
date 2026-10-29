@@ -2,6 +2,28 @@
   <Window.SystemBackdrop><MicaBackdrop Kind="Base"/></Window.SystemBackdrop>
   <Grid x:Name="RootLayout" Background="Transparent">
     <Grid.Resources>
+      <ControlTemplate x:Key="VerticalResizeTemplate" TargetType="Thumb">
+        <Grid Background="Transparent">
+          <VisualStateManager.VisualStateGroups><VisualStateGroup x:Name="CommonStates">
+            <VisualState x:Name="Normal"/>
+            <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="Grip.Opacity" Value="0.5"/></VisualState.Setters></VisualState>
+            <VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Grip.Opacity" Value="0.8"/></VisualState.Setters></VisualState>
+            <VisualState x:Name="Disabled"/>
+          </VisualStateGroup></VisualStateManager.VisualStateGroups>
+          <Border x:Name="Grip" Width="40" Height="2" CornerRadius="1" Opacity="0" Background="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+        </Grid>
+      </ControlTemplate>
+      <ControlTemplate x:Key="HorizontalResizeTemplate" TargetType="Thumb">
+        <Grid Background="Transparent">
+          <VisualStateManager.VisualStateGroups><VisualStateGroup x:Name="CommonStates">
+            <VisualState x:Name="Normal"/>
+            <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="Grip.Opacity" Value="0.5"/></VisualState.Setters></VisualState>
+            <VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Grip.Opacity" Value="0.8"/></VisualState.Setters></VisualState>
+            <VisualState x:Name="Disabled"/>
+          </VisualStateGroup></VisualStateManager.VisualStateGroups>
+          <Border x:Name="Grip" Width="2" Height="40" CornerRadius="1" Opacity="0" Background="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+        </Grid>
+      </ControlTemplate>
 <ControlTemplate x:Key="SquircleToggleTemplate" TargetType="ToggleButton">
 <Grid x:Name="StateRoot" Background="Transparent">
 <VisualStateManager.VisualStateGroups><VisualStateGroup x:Name="CommonStates"><VisualState x:Name="Normal"/><VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundPointerOver}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundPointerOver}"/></VisualState.Setters></VisualState><VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundPressed}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundPressed}"/></VisualState.Setters></VisualState><VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundDisabled}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundDisabled}"/></VisualState.Setters></VisualState><VisualState x:Name="Checked"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundChecked}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundChecked}"/></VisualState.Setters></VisualState><VisualState x:Name="CheckedPointerOver"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundCheckedPointerOver}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundCheckedPointerOver}"/></VisualState.Setters></VisualState><VisualState x:Name="CheckedPressed"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundCheckedPressed}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundCheckedPressed}"/></VisualState.Setters></VisualState><VisualState x:Name="Indeterminate"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundIndeterminate}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundIndeterminate}"/></VisualState.Setters></VisualState><VisualState x:Name="IndeterminatePointerOver"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundIndeterminatePointerOver}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundIndeterminatePointerOver}"/></VisualState.Setters></VisualState><VisualState x:Name="IndeterminatePressed"><VisualState.Setters><Setter Target="Surface.Fill" Value="{ThemeResource ToggleButtonBackgroundIndeterminatePressed}"/><Setter Target="Presenter.Foreground" Value="{ThemeResource ToggleButtonForegroundIndeterminatePressed}"/></VisualState.Setters></VisualState></VisualStateGroup></VisualStateManager.VisualStateGroups>
@@ -50,19 +72,27 @@
           <SymbolIcon Symbol="Message"/>
         </ToggleButton>
         <ToggleButton Tag="server" Click="OnMenuClick" ToolTipService.ToolTip="llama-server" AutomationProperties.Name="llama-server"><SymbolIcon Symbol="Setting"/></ToggleButton>
-        <ToggleButton Tag="web" Click="OnMenuClick" ToolTipService.ToolTip="Open WebUI" AutomationProperties.Name="Open WebUI"><SymbolIcon Symbol="Globe"/></ToggleButton>
         <ToggleButton Tag="cli" Click="OnMenuClick" ToolTipService.ToolTip="Claude / Codex" AutomationProperties.Name="Claude / Codex"><FontIcon Glyph="&#xE756;"/></ToggleButton>
         <ToggleButton Tag="logs" Click="OnMenuClick" ToolTipService.ToolTip="ログ" AutomationProperties.Name="ログ"><SymbolIcon Symbol="Document"/></ToggleButton>
       </StackPanel>
-      <Grid x:Name="HistoryPane" Grid.Column="1" Width="240" Padding="12,20,12,12" RowSpacing="16">
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-        <TextBlock Text="チャット" FontSize="20" FontWeight="SemiBold"/>
+      <Grid x:Name="HistoryPane" Grid.Column="1" Width="240" Padding="12,20,12,12" SizeChanged="OnHistoryLayoutChanged">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition x:Name="ChatHistoryRow" Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <local:WorkspaceExplorerView x:Name="ExplorerPane" Height="240" Visibility="Collapsed"/>
+        <local:VerticalResizeHandle x:Name="ExplorerResizeHandle" Grid.Row="1" Height="8" Visibility="Collapsed" HandleTemplate="{StaticResource VerticalResizeTemplate}" DragStarted="OnExplorerResizeStarted" DragDelta="OnExplorerResizeDelta" KeyDown="OnExplorerResizeKeyDown" AutomationProperties.Name="エクスプローラーとチャット履歴の高さを調整" ToolTipService.ToolTip="ドラッグして高さを調整"/>
+        <Grid x:Name="ChatHistoryPanel" Grid.Row="2" MinHeight="144" RowSpacing="12">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Button x:Name="ChatSectionToggle" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent" BorderThickness="0" Padding="0" MinHeight="32" Click="OnToggleChatSection" AutomationProperties.Name="チャットを折りたたむ">
+          <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="ChatSectionChevron" Glyph="&#xE70D;" FontSize="10"/><TextBlock Text="チャット" FontSize="14" FontWeight="SemiBold"/></StackPanel>
+        </Button>
         <Button x:Name="NewChatButton" Grid.Row="1" HorizontalAlignment="Stretch" Click="OnNewChat" AutomationProperties.Name="新しいチャット"><StackPanel Orientation="Horizontal" Spacing="10"><SymbolIcon Symbol="Add"/><TextBlock Text="新しいチャット"/></StackPanel></Button>
         <ListView x:Name="SessionList" Grid.Row="2" SelectionChanged="OnSessionSelected" SelectionMode="Single" ContextRequested="OnSessionContextRequested" PreviewKeyDown="OnHistoryPreviewKeyDown">
           <ListView.ItemTemplate><DataTemplate><StackPanel Padding="0,6"><TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></ListView.ItemTemplate>
         </ListView>
+        </Grid>
+        <local:VerticalResizeHandle x:Name="GitResizeHandle" Grid.Row="3" Height="8" Visibility="Collapsed" HandleTemplate="{StaticResource VerticalResizeTemplate}" DragStarted="OnGitResizeStarted" DragDelta="OnGitResizeDelta" KeyDown="OnGitResizeKeyDown" AutomationProperties.Name="チャット履歴と Git の高さを調整" ToolTipService.ToolTip="ドラッグして高さを調整"/>
+        <Grid x:Name="GitPanel" Grid.Row="4" Height="320" Visibility="Collapsed" SizeChanged="OnHistoryLayoutChanged"/>
       </Grid>
-      <Grid Grid.Column="2" Padding="24,20,24,20" RowSpacing="16">
+      <Grid x:Name="PageLayout" Grid.Column="2" Padding="24,20,24,20" RowSpacing="16">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <TextBlock x:Name="PageTitle" Text="llama-server" FontSize="28" FontWeight="SemiBold"/>
         <InfoBar x:Name="Notice" Grid.Row="1" IsOpen="False" IsClosable="True"/>
@@ -75,16 +105,9 @@
           <ScrollViewer x:Name="FormScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" SizeChanged="OnFormSizeChanged">
             <StackPanel x:Name="Form" Spacing="16" HorizontalAlignment="Left" Margin="0,0,0,16"/>
           </ScrollViewer>
-          <Grid x:Name="WebPanel" Grid.RowSpan="2" Visibility="Collapsed" RowSpacing="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-            <CommandBar DefaultLabelPosition="Right" IsDynamicOverflowEnabled="True" Background="Transparent">
-              <AppBarButton x:Name="StartWebButton" IsEnabled="False" Label="Open WebUI を起動" Icon="Play" Click="OnStartWeb"/>
-              <AppBarButton x:Name="StopWebButton" IsEnabled="False" Label="停止" Icon="Stop" Click="OnStopWeb"/>
-              <AppBarButton x:Name="ReloadWebButton" IsEnabled="False" Label="再読み込み" Icon="Refresh" Click="OnReloadWeb"/>
-              <AppBarButton x:Name="ExternalWebButton" IsEnabled="False" Label="外部ブラウザー" Icon="Globe" Click="OnExternalWeb"/>
-            </CommandBar>
-            <WebView2 x:Name="Browser" Grid.Row="1" Visibility="Collapsed"/>
-          </Grid>
-          <TextBox x:Name="LogView" Grid.RowSpan="2" Visibility="Collapsed" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" FontFamily="Cascadia Code, Noto Sans JP" Background="Transparent"/>
+          <ScrollViewer x:Name="LogScroll" Grid.RowSpan="2" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
+            <TextBlock x:Name="LogView" IsTextSelectionEnabled="True" TextWrapping="Wrap" FontFamily="Cascadia Code, Noto Sans JP" Padding="12" AutomationProperties.Name="ログ"/>
+          </ScrollViewer>
           <Grid x:Name="InvestigationPanel" Grid.RowSpan="2" Visibility="Collapsed" RowSpacing="10">
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -140,18 +163,26 @@
               </Border>
             </StackPanel>
           </Grid>
-          <Grid x:Name="ChatPanel" Grid.RowSpan="2" RowSpacing="12">
+          <Grid x:Name="ChatWorkspaceLayout" Grid.RowSpan="2" SizeChanged="OnChatWorkspaceSizeChanged">
+          <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+          <Grid x:Name="ChatPanel">
+            <Grid.ColumnDefinitions><ColumnDefinition x:Name="EditorColumn" Width="0"/><ColumnDefinition x:Name="EditorDividerColumn" Width="0"/><ColumnDefinition x:Name="ConversationColumn" Width="*"/></Grid.ColumnDefinitions>
+            <Border x:Name="EditorPane" Visibility="Collapsed" BorderThickness="1" BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" Background="{ThemeResource TextControlBackground}" CornerRadius="8">
+              <local:FileEditorView x:Name="FileEditor"/>
+            </Border>
+            <local:HorizontalResizeHandle x:Name="EditorResizeHandle" Grid.Column="1" Visibility="Collapsed" HandleTemplate="{StaticResource HorizontalResizeTemplate}" DragStarted="OnEditorResizeStarted" DragDelta="OnEditorResizeDelta" KeyDown="OnEditorResizeKeyDown" AutomationProperties.Name="エディタとチャットの幅を調整" ToolTipService.ToolTip="ドラッグして左右の幅を調整"/>
+            <Grid Grid.Column="2">
             <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" SizeChanged="OnChatSizeChanged" ViewChanged="OnChatViewChanged"><StackPanel x:Name="ChatMessages" Spacing="18" Padding="0,12,12,16"/></ScrollViewer>
-            <Grid x:Name="ChatActivityPanel" Grid.Row="1" Visibility="Collapsed" Opacity="0.6" ColumnSpacing="6">
+            <Grid x:Name="ChatActivityPanel" Grid.Row="1" Visibility="Collapsed" Opacity="0.6" ColumnSpacing="6" SizeChanged="OnConsoleLayoutChanged">
               <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
               <TextBlock x:Name="ChatActivitySpinner" FontFamily="Segoe UI Symbol" MinWidth="16"/>
               <TextBlock x:Name="ChatActivity" Grid.Column="1" TextWrapping="Wrap"/>
             </Grid>
-            <ScrollViewer x:Name="PendingChatScroll" Grid.Row="2" MaxHeight="96" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <ScrollViewer x:Name="PendingChatScroll" Grid.Row="2" MaxHeight="96" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" SizeChanged="OnConsoleLayoutChanged">
               <StackPanel x:Name="PendingChatMessages" Spacing="4" Opacity="0.65"/>
             </ScrollViewer>
-            <Border x:Name="ChatComposer" Grid.Row="3" Background="{ThemeResource TextControlBackground}" BorderBrush="{ThemeResource TextControlBorderBrush}" BorderThickness="1" CornerRadius="12">
+            <Border x:Name="ChatComposer" Grid.Row="3" Margin="0,8,0,0" SizeChanged="OnConsoleLayoutChanged" Background="{ThemeResource TextControlBackground}" BorderBrush="{ThemeResource TextControlBorderBrush}" BorderThickness="1" CornerRadius="12">
               <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <StackPanel x:Name="AttachmentList" Spacing="6" Margin="12,8,12,0" Visibility="Collapsed"/>
                 <Grid Grid.Row="1">
@@ -178,32 +209,45 @@
                   <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8" Spacing="4">
                     <ToggleButton x:Name="ChatReasoningVisibilityButton" Template="{StaticResource SquircleToggleTemplate}" CornerRadius="8" UseSystemFocusVisuals="True" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnToggleChatReasoningVisibility" Width="40" Height="40" Padding="0" BorderThickness="0" ToolTipService.ToolTip="推論内容の表示" AutomationProperties.Name="推論内容の表示"><FontIcon Glyph="&#xE890;"/></ToggleButton>
                     <Button x:Name="ChatReasoningButton" Template="{StaticResource SquircleButtonTemplate}" CornerRadius="8" UseSystemFocusVisuals="True" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnChatReasoningSettings" Width="40" Height="40" Padding="0" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="推論レベル" AutomationProperties.Name="推論レベル"><FontIcon Glyph="&#xE82F;"/></Button>
+                    <Button x:Name="ChatConsoleButton" Template="{StaticResource SquircleButtonTemplate}" CornerRadius="8" UseSystemFocusVisuals="True" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnToggleConsole" Width="40" Height="40" Padding="0" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="PowerShell コンソール" AutomationProperties.Name="PowerShell コンソール"><FontIcon Glyph="&#xE756;"/></Button>
                     <Button x:Name="SendChatButton" Click="OnSendChat" Style="{StaticResource AccentButtonStyle}" Width="40" Height="40" Padding="0" CornerRadius="20" BorderThickness="0" ToolTipService.ToolTip="送信" AutomationProperties.Name="送信"><SymbolIcon Symbol="Send"/></Button>
                     <Button x:Name="StopChatButton" Click="OnStopChat" Width="40" Height="40" Padding="0" CornerRadius="20" Visibility="Collapsed" ToolTipService.ToolTip="停止" AutomationProperties.Name="停止"><SymbolIcon Symbol="Stop"/></Button>
                   </StackPanel>
                 </Grid>
               </Grid>
             </Border>
+            </Grid>
+          </Grid>
+          <Grid x:Name="ConsolePanel" Grid.Row="1" Visibility="Collapsed">
+            <Grid.RowDefinitions><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <local:VerticalResizeHandle HandleTemplate="{StaticResource VerticalResizeTemplate}" DragStarted="OnConsoleResizeStarted" DragDelta="OnConsoleResizeDelta" KeyDown="OnConsoleResizeKeyDown" AutomationProperties.Name="ターミナルの高さを調整" ToolTipService.ToolTip="ドラッグしてターミナルの高さを調整"/>
+            <Border Grid.Row="1" Background="{ThemeResource TextControlBackground}" BorderBrush="{ThemeResource TextControlBorderBrush}" BorderThickness="1" CornerRadius="8"><Grid x:Name="ConsoleHost" Height="280"/></Border>
+          </Grid>
           </Grid>
         </Grid>
       </Grid>
     </Grid>
     <Border Grid.Row="2" Background="{ThemeResource ControlFillColorSecondaryBrush}" BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="16,8">
       <Grid ColumnSpacing="12">
-        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <Grid>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <StackPanel x:Name="GitStatus" Grid.Column="1" HorizontalAlignment="Left" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
+          <Button x:Name="GitBranchButton" Click="OnGitBranchClick" Background="Transparent" BorderThickness="0" Padding="0,0,6,0" MinWidth="0" MinHeight="0" FontSize="12" MaxWidth="220" AutomationProperties.Name="Git ブランチを切り替え・作成"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE895;" FontSize="12"/><TextBlock x:Name="GitBranchText" TextTrimming="CharacterEllipsis" MaxWidth="180"/></StackPanel></Button>
+          <Button x:Name="GitStatusPullButton" Click="OnGitPull" Background="Transparent" BorderThickness="0" Padding="4,0" MinHeight="0" MinWidth="0" FontSize="12" Visibility="Collapsed" AutomationProperties.Name="Git プル"/>
+          <Button x:Name="GitStatusPushButton" Click="OnGitPush" Background="Transparent" BorderThickness="0" Padding="4,0" MinHeight="0" MinWidth="0" FontSize="12" Visibility="Collapsed" AutomationProperties.Name="Git プッシュ"/>
+        </StackPanel>
+        <Grid Grid.Column="0">
           <Button x:Name="LlamaStatusButton" Click="OnToggleServer" Padding="0" MinHeight="0" MinWidth="0" Background="Transparent" BorderThickness="0" VerticalAlignment="Center" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
             <TextBlock TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
               <Run x:Name="LlamaStatusPrefix" Text="llama-server: "/><Run x:Name="LlamaStatusState"/><Run x:Name="LlamaStatusDetail" Text="確認中"/>
             </TextBlock>
           </Button>
-          <TextBlock Grid.Column="1" Text=" ｜ " FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-          <TextBlock x:Name="ConnectionStatusText" Grid.Column="2" TextWrapping="NoWrap" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
-            <Run x:Name="WebStatusPrefix" Text="Open WebUI: "/><Run x:Name="WebStatusState"/><Run x:Name="WebStatusDetail" Text="確認中"/>
-          </TextBlock>
         </Grid>
-        <TextBlock x:Name="ChatStatusText" Grid.Column="1" Visibility="Collapsed" TextWrapping="NoWrap" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" ToolTipService.ToolTip="直近の推論の入力と生成の合計トークン数 / サーバーの最大コンテキスト数。使用数は応答取得後に更新します。"/>
+        <TextBlock x:Name="GitOperationStatusText" Grid.Column="2" Visibility="Collapsed" FontSize="12" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Foreground="{ThemeResource TextFillColorSecondaryBrush}" AutomationProperties.LiveSetting="Polite"/>
+        <StackPanel x:Name="EditorStatus" Grid.Column="3" Orientation="Horizontal" Spacing="4" Visibility="Collapsed">
+          <Button x:Name="EditorEncodingButton" Content="UTF-8" Click="OnEditorEncodingClick" Background="Transparent" BorderThickness="0" Padding="6,0" MinHeight="0" MinWidth="0" FontSize="12" ToolTipService.ToolTip="文字コードを変更" AutomationProperties.Name="文字コードを変更"/>
+          <Button x:Name="EditorLineEndingButton" Content="LF" Click="OnEditorLineEndingClick" Background="Transparent" BorderThickness="0" Padding="6,0" MinHeight="0" MinWidth="0" FontSize="12" ToolTipService.ToolTip="改行コードを変更" AutomationProperties.Name="改行コードを変更"/>
+        </StackPanel>
+        <TextBlock x:Name="ChatStatusText" Grid.Column="4" Visibility="Collapsed" TextWrapping="NoWrap" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" ToolTipService.ToolTip="直近の推論の入力と生成の合計トークン数 / サーバーの最大コンテキスト数。使用数は応答取得後に更新します。"/>
       </Grid>
     </Border>
   </Grid>

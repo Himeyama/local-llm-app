@@ -2,8 +2,8 @@
 .SYNOPSIS
 Starts a local multimodal llama-server API using the ROCm/HIP backend.
 
-The llama.cpp Web UI is disabled so OpenWebUI or another OpenAI-compatible
-client can provide the user interface.
+The llama.cpp Web UI is disabled; the GUI and OpenAI-compatible CLI clients
+connect to the API directly.
 
 .EXAMPLE
 .\Start-LlamaServer.ps1
@@ -125,7 +125,7 @@ $serverArgs = @(
     '--host', $listenAddress,
     '--port', '9931',
     '--cors-origins', 'localhost',
-    # OpenWebUI and Claude Code use the OpenAI-compatible API directly.
+    # The GUI and CLI clients use the OpenAI-compatible API directly.
     '--no-webui'
 )
 

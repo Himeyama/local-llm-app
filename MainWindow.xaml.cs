@@ -6,7 +6,6 @@ using LocalLlm.Gui.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Windowing;
-using Microsoft.Web.WebView2.Core;
 
 namespace LocalLlm.Gui;
 
@@ -18,13 +17,10 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer spinnerTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
     private readonly ServerStartupStatus serverStatus = new();
-    private readonly WebStartupStatus webStatus = new();
     private Settings settings = new();
     private bool ready, checking, closing;
     private string page = "chat";
     private bool historyExpanded = true;
-    private int loadedPort;
-    private Task? browserInitialization;
     private Action? saveServerSettings;
     private TextBox[] serverLaunchInputs = Array.Empty<TextBox>();
     private Button[] cliButtons = Array.Empty<Button>();
@@ -34,7 +30,6 @@ public sealed partial class MainWindow : Window
     private ComboBox? codexLanAddress;
     private Button? copyCodexLanCommand, retryCodexLanProxy;
     private bool ServerActive => serverStatus.IsConnected || serverStatus.IsStarting || runner.IsRunning("llama-server");
-    private string WebUrl => $"http://127.0.0.1:{settings.WebPort}";
 
     public MainWindow()
     {
@@ -47,12 +42,10 @@ public sealed partial class MainWindow : Window
         runner.Log += message => DispatcherQueue.TryEnqueue(() => {
             AddLog(message);
             if (message.StartsWith("[llama-server] ", StringComparison.Ordinal)) { serverStatus.ObserveLog(message); UpdateStatus(); }
-            if (message.StartsWith("[Open WebUI] ", StringComparison.Ordinal)) { webStatus.ObserveLog(message); UpdateStatus(); }
         });
         runner.Exited += (name, code, stopRequested) => DispatcherQueue.TryEnqueue(() => {
             if (closing) return;
             if (name == "llama-server") { serverStatus.Finish(code, stopRequested); StopCodexLanProxy(); }
-            else if (name == "Open WebUI") { webStatus.Finish(code, stopRequested); loadedPort = 0; }
             else if (name == CodexLanConnection.ProcessName) {
                 codexLanReady = false;
                 if (!stopRequested) codexLanError = "LAN 接続を起動できませんでした。ログを確認して再試行してください。";
@@ -62,9 +55,11 @@ public sealed partial class MainWindow : Window
             if (code != 0 && !stopRequested) ShowError($"{name} が終了しました（コード {code}）。ログを確認してください。");
         });
         timer.Tick += async (_, _) => await RefreshStatusAsync();
-        spinnerTimer.Tick += (_, _) => { serverStatus.Tick(); webStatus.Tick(); UpdateStatus(); };
-        Closed += (_, _) => { closing = true; timer.Stop(); spinnerTimer.Stop(); runner.Dispose(); http.Dispose(); Browser.Close(); };
+        spinnerTimer.Tick += (_, _) => { serverStatus.Tick(); UpdateStatus(); };
+        Closed += (_, _) => { closing = true; timer.Stop(); spinnerTimer.Stop(); runner.Dispose(); http.Dispose(); };
         ready = true;
+        InitializeEditor();
+        InitializeGit();
         InitializeChat();
         InitializeInvestigation();
         BuildPage();
@@ -128,7 +123,17 @@ public sealed partial class MainWindow : Window
         if (closing) return;
         logs.Enqueue($"{DateTime.Now:HH:mm:ss} {message}");
         while (logs.Count > 600) logs.Dequeue();
-        if (page == "logs") LogView.Text = string.Join(Environment.NewLine, logs);
+        if (page == "logs") UpdateLogView();
+    }
+    private void UpdateLogView()
+    {
+        var text = string.Join(Environment.NewLine, logs);
+        if (LogView.Text == text) return;
+        var offset = LogScroll.VerticalOffset;
+        LogView.Text = text;
+        // Restore after layout so the new scroll extent is used, without animation.
+        LogScroll.UpdateLayout();
+        LogScroll.ChangeView(null, offset, null, disableAnimation: true);
     }
     private void ShowError(string message)
     {
@@ -255,10 +260,12 @@ public sealed partial class MainWindow : Window
         HistoryPane.Visibility = page == "chat" && historyExpanded ? Visibility.Visible : Visibility.Collapsed;
         AppTitleBar.IsPaneToggleButtonVisible = page == "chat";
         foreach (var menu in MenuRail.Children.OfType<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>()) menu.IsChecked = menu.Tag.ToString() == page;
-        PageTitle.Text = page switch { "chat" => currentChat?.Title ?? "チャット", "investigation" => "脆弱性診断 · プロトタイプ", "server" => "llama-server", "web" => "Open WebUI", "cli" => "Claude / Codex", _ => "ログ" };
+        PageTitle.Text = page switch { "chat" => currentChat?.Title ?? "チャット", "investigation" => "脆弱性診断 · プロトタイプ", "server" => "llama-server", "cli" => "Claude / Codex", _ => "ログ" };
         PageTitle.Visibility = page == "chat" ? Visibility.Collapsed : Visibility.Visible;
+        PageLayout.RowSpacing = page == "chat" ? 0 : 16;
         AppTitleBar.Subtitle = PageTitle.Text;
-        ChatPanel.Visibility = page == "chat" ? Visibility.Visible : Visibility.Collapsed;
+        ChatWorkspaceLayout.Visibility = page == "chat" ? Visibility.Visible : Visibility.Collapsed;
+        RefreshGitContext();
         InvestigationPanel.Visibility = page == "investigation" ? Visibility.Visible : Visibility.Collapsed;
         saveServerSettings = null;
         ServerCommandBar.Visibility = page == "server" ? Visibility.Visible : Visibility.Collapsed;
@@ -269,14 +276,12 @@ public sealed partial class MainWindow : Window
         settingGroup = null;
         Form.Spacing = 16;
         ResizeForm(FormScroll.ActualWidth);
-        FormScroll.Visibility = page is "web" or "logs" or "chat" or "investigation" ? Visibility.Collapsed : Visibility.Visible;
-        WebPanel.Visibility = page == "web" ? Visibility.Visible : Visibility.Collapsed;
-        LogView.Visibility = page == "logs" ? Visibility.Visible : Visibility.Collapsed;
-        UpdateWebControls();
+        FormScroll.Visibility = page is "logs" or "chat" or "investigation" ? Visibility.Collapsed : Visibility.Visible;
+        LogScroll.Visibility = page == "logs" ? Visibility.Visible : Visibility.Collapsed;
         UpdateChatControls();
+        UpdateEditorLayout();
         switch (page)
         {
-            case "web": _ = EnsureBrowserAsync(); break;
             case "server":
                 var lanAccess = SettingCard("LAN に公開", "LAN 内で llama-server と Codex を利用できます。変更は自動保存され、次回起動時に反映されます。",
                     new ToggleSwitch { OnContent = "オン", OffContent = "オフ", IsOn = settings.ServerLanAccess });
@@ -305,6 +310,11 @@ public sealed partial class MainWindow : Window
                     model.Text = modelPath; mmproj.Text = mmprojPath; exe.Text = serverExe;
                 };
                 UpdateServerControls();
+                BeginSettingGroup();
+                var autoSave = SettingCard("エディタの自動保存", "ファイル編集から約1秒後に保存します。オフの場合は Ctrl+S で保存します。", new ToggleSwitch { IsOn = settings.EditorAutoSave, OnContent = "オン", OffContent = "オフ" });
+                autoSave.Toggled += (_, _) => Execute(() => { settings.EditorAutoSave = autoSave.IsOn; settings.Save(); FileEditor.AutoSaveEnabled = autoSave.IsOn; });
+                var wordWrap = SettingCard("エディタの折り返し", "長い行をエディタの幅に合わせて表示します。ファイルの改行は変更しません。", new ToggleSwitch { IsOn = settings.EditorWordWrap, OnContent = "オン", OffContent = "オフ" });
+                wordWrap.Toggled += (_, _) => Execute(() => { settings.EditorWordWrap = wordWrap.IsOn; settings.Save(); FileEditor.WordWrapEnabled = wordWrap.IsOn; });
                 break;
             case "cli":
                 var workingDirectory = Input("作業ディレクトリ", string.IsNullOrWhiteSpace(settings.CliWorkingDirectory) ? settings.RepositoryRoot : settings.CliWorkingDirectory);
@@ -348,7 +358,7 @@ public sealed partial class MainWindow : Window
                 copyCodexLanCommand = SettingCard("別 PC 用の起動コマンド", "別 PC の Bash で、操作したいフォルダーから実行してください。", Button("コマンドをコピー", CopyCodexLanCommand));
                 UpdateCodexLanControls();
                 break;
-            case "logs": LogView.Text = string.Join(Environment.NewLine, logs); break;
+            case "logs": UpdateLogView(); break;
         }
     }
     private string AssetPath(string path, string defaultPath) => Path.GetFullPath(
@@ -397,12 +407,10 @@ public sealed partial class MainWindow : Window
         if (closing) return;
         UpdateServerControls();
         foreach (var button in cliButtons) button.IsEnabled = serverStatus.IsConnected;
-        UpdateWebControls();
         UpdateChatControls();
         UpdateCodexLanControls();
         SetConnectionStatus(LlamaStatusPrefix, LlamaStatusState, LlamaStatusDetail, "llama-server", serverStatus.Spinner, serverStatus.Message);
-        SetConnectionStatus(WebStatusPrefix, WebStatusState, WebStatusDetail, "Open WebUI", webStatus.Spinner, webStatus.Message);
-        var starting = serverStatus.IsStarting || webStatus.IsStarting;
+        var starting = serverStatus.IsStarting;
         var interval = TimeSpan.FromSeconds(starting ? 1 : 5);
         if (timer.Interval != interval) timer.Interval = interval;
         if (starting && !spinnerTimer.IsEnabled) spinnerTimer.Start();
@@ -417,23 +425,6 @@ public sealed partial class MainWindow : Window
         detail.Text = message[keyword.Length..];
         var resource = keyword == "接続済み" ? "SystemFillColorSuccessBrush" : keyword == "未接続" ? "SystemFillColorCriticalBrush" : "TextFillColorSecondaryBrush";
         state.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[resource];
-    }
-    private void UpdateWebControls()
-    {
-        Browser.Visibility = webStatus.IsConnected ? Visibility.Visible : Visibility.Collapsed;
-        StartWebButton.IsEnabled = serverStatus.IsConnected && !webStatus.IsStarting && !webStatus.IsConnected;
-        StopWebButton.IsEnabled = runner.IsRunning("Open WebUI");
-        ReloadWebButton.IsEnabled = webStatus.IsConnected;
-        ExternalWebButton.IsEnabled = webStatus.IsConnected;
-    }
-    private void StartWeb()
-    {
-        if (!serverStatus.IsConnected) return;
-        if (webStatus.IsStarting || runner.IsRunning("Open WebUI")) return;
-        if (webStatus.IsConnected) return;
-        webStatus.Begin(); loadedPort = 0; UpdateStatus();
-        try { StartScript("Open WebUI", "Start-OpenWebUI.ps1", new() { ["Port"] = settings.WebPort.ToString(CultureInfo.InvariantCulture) }); }
-        catch { webStatus.Failed(); UpdateStatus(); throw; }
     }
     private void EnsureCodexLanProxy()
     {
@@ -504,31 +495,16 @@ public sealed partial class MainWindow : Window
         try { Process.Start(info)?.Dispose(); }
         catch (System.ComponentModel.Win32Exception e) { throw new InvalidOperationException("Windows Terminal を開けません。インストールと wt.exe の実行エイリアスを確認してください。", e); }
     }
-    private Task EnsureBrowserAsync() => !webStatus.IsConnected ? Task.CompletedTask : browserInitialization ??= InitializeBrowserAsync();
-    private async Task InitializeBrowserAsync()
-    {
-        try {
-            var env = await CoreWebView2Environment.CreateWithOptionsAsync("", Path.Combine(Settings.DataDirectory, "WebView2"), null);
-            await Browser.EnsureCoreWebView2Async(env);
-            Browser.CoreWebView2.NewWindowRequested += (_, args) => { args.Handled = true; Execute(() => Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true })?.Dispose()); };
-            Browser.NavigationCompleted += (_, args) => { if (!webStatus.IsConnected) return; if (!args.IsSuccess) { Notice.Title = "Open WebUI に接続できません"; Notice.Message = "Open WebUI を起動し、準備が完了するまでお待ちください。接続できると自動で表示します。"; Notice.Severity = InfoBarSeverity.Informational; Notice.IsOpen = true; loadedPort = 0; } else Notice.IsOpen = false; };
-            if (webStatus.IsConnected) { Browser.Source = new Uri(WebUrl); loadedPort = settings.WebPort; }
-        } catch (Exception e) { browserInitialization = null; ShowError("WebView2 を初期化できません。WebView2 Runtime を確認してください。 " + e.Message); }
-    }
     private async Task RefreshStatusAsync()
     {
         if (checking || closing) return;
         checking = true;
         try {
             var serverTask = ProbeAsync("http://127.0.0.1:9931/props");
-            var webTask = ProbeAsync(WebUrl + "/health");
             var proxyTask = ProbeAsync(CodexLanConnection.HealthUrl);
-            await Task.WhenAll(serverTask, webTask, proxyTask);
+            await Task.WhenAll(serverTask, proxyTask);
             if (closing) return;
-            var server = await serverTask; var web = await webTask;
-            var webJustConnected = web != null && !webStatus.IsConnected;
-            webStatus.SetConnection(web != null);
-            if (web == null) loadedPort = 0;
+            var server = await serverTask;
             string model = "";
             maximumChatContext = null;
             if (server != null) try { maximumChatContext = ChatContextUsage.Maximum(System.Text.Json.Nodes.JsonNode.Parse(server)); } catch (JsonException) { }
@@ -540,14 +516,6 @@ public sealed partial class MainWindow : Window
                 codexLanReady = activeServerLanAccess && runner.IsRunning(CodexLanConnection.ProcessName) && CodexLanConnection.IsReady(await proxyTask);
             } else StopCodexLanProxy();
             UpdateStatus();
-            if (web != null && (page == "web" || Browser.CoreWebView2 != null)) {
-                var browserAlreadyInitialized = Browser.CoreWebView2 != null;
-                await EnsureBrowserAsync();
-                if (webStatus.IsConnected && Browser.CoreWebView2 != null) {
-                    if (loadedPort != settings.WebPort) { loadedPort = settings.WebPort; Browser.CoreWebView2.Navigate(WebUrl); }
-                    else if (webJustConnected && browserAlreadyInitialized) Browser.CoreWebView2.Reload();
-                }
-            }
         } catch (Exception e) { if (!closing) AddLog(e.Message); }
         finally { checking = false; }
     }
@@ -556,8 +524,4 @@ public sealed partial class MainWindow : Window
         try { using var response = await http.GetAsync(url); return response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync() : null; }
         catch { return null; }
     }
-    private void OnStartWeb(object sender, RoutedEventArgs e) => Execute(StartWeb);
-    private void OnStopWeb(object sender, RoutedEventArgs e) => Execute(() => runner.Stop("Open WebUI"));
-    private async void OnReloadWeb(object sender, RoutedEventArgs e) { if (!webStatus.IsConnected) return; await EnsureBrowserAsync(); if (webStatus.IsConnected) Execute(() => Browser.CoreWebView2?.Navigate(WebUrl)); }
-    private void OnExternalWeb(object sender, RoutedEventArgs e) { if (webStatus.IsConnected) Execute(() => Process.Start(new ProcessStartInfo(WebUrl) { UseShellExecute = true })?.Dispose()); }
 }
