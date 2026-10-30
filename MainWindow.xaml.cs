@@ -62,6 +62,7 @@ public sealed partial class MainWindow : Window
         InitializeGit();
         InitializeChat();
         InitializeInvestigation();
+        RestoreHistoryLayout();
         BuildPage();
         timer.Start();
         _ = RefreshStatusAsync();

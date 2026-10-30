@@ -99,6 +99,12 @@ try
     var oldSettings = System.Text.Json.JsonSerializer.Deserialize<Settings>("{\"RepositoryRoot\":\"C:/external\",\"Threads\":8}")!;
     Assert(oldSettings.RepositoryRoot != "C:/external" && oldSettings.Threads == 8, "Legacy external root must be ignored without losing preferences");
     Assert(!oldSettings.ServerLanAccess, "Existing settings must default to loopback access");
+    Assert(oldSettings.ExplorerSectionExpanded && oldSettings.ChatSectionExpanded && oldSettings.GitSectionExpanded, "Legacy settings must keep sections open");
+    var panes = System.Text.Json.JsonSerializer.Deserialize<Settings>(System.Text.Json.JsonSerializer.Serialize(new Settings {
+        ExplorerPaneHeight = 375, GitPaneHeight = 225, ExplorerSectionExpanded = false, ChatSectionExpanded = false, GitSectionExpanded = false
+    }))!;
+    Assert(panes.ExplorerPaneHeight == 375 && panes.GitPaneHeight == 225 && !panes.ExplorerSectionExpanded && !panes.ChatSectionExpanded && !panes.GitSectionExpanded,
+        "Shared pane boundaries and expansion preferences must survive serialization");
     var lanSettings = System.Text.Json.JsonSerializer.Deserialize<Settings>(System.Text.Json.JsonSerializer.Serialize(new Settings { ServerLanAccess = true }))!;
     Assert(lanSettings.ServerLanAccess, "LAN access preference must survive serialization");
     Console.WriteLine("PASS: independent root resolution and legacy settings migration");

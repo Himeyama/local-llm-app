@@ -15,10 +15,9 @@ public sealed partial class MainWindow
     {
         if (currentChat == null) return;
         var session = currentChat;
-        var open = ConsolePanel.Visibility != Visibility.Visible || consoleChatId != session.Id;
-        session.ConsoleOpen = open;
-        try { chatStore.SaveConsoleVisibility(session, open); }
-        catch (Exception ex) { ShowError("コンソールの表示状態を保存できません: " + ex.Message); }
+        var open = settings.ConsoleExpanded != true;
+        settings.ConsoleExpanded = open;
+        SaveWorkspacePaneLayout();
         failedConsoleRestores.Remove(session.Id);
         if (!open) { ConsolePanel.Visibility = Visibility.Collapsed; return; }
         await OpenConsoleAsync(session);
@@ -26,7 +25,7 @@ public sealed partial class MainWindow
 
     private void RestoreConsoleVisibility()
     {
-        if (currentChat?.ConsoleOpen != true) { ConsolePanel.Visibility = Visibility.Collapsed; return; }
+        if (currentChat == null || settings.ConsoleExpanded != true) { ConsolePanel.Visibility = Visibility.Collapsed; return; }
         if (!RootLayout.IsLoaded || failedConsoleRestores.Contains(currentChat.Id)) return;
         if (consoleChatId == currentChat.Id && ConsolePanel.Visibility == Visibility.Visible && CurrentConsole is { IsFaulted: false } existing &&
             string.Equals(existing.Directory, Path.GetFullPath(currentChat.Workspace), StringComparison.OrdinalIgnoreCase)) return;
@@ -35,7 +34,7 @@ public sealed partial class MainWindow
 
     private async Task OpenConsoleAsync(ChatSession session)
     {
-        if (closing || currentChat != session || !session.ConsoleOpen) return;
+        if (closing || currentChat != session || settings.ConsoleExpanded != true) return;
         var sessionId = session.Id;
         TerminalView? created = null;
         try {
@@ -50,9 +49,9 @@ public sealed partial class MainWindow
             foreach (var pair in consoles) pair.Value.Visibility = pair.Key == sessionId ? Visibility.Visible : Visibility.Collapsed;
             consoleChatId = sessionId;
             ConsolePanel.Visibility = Visibility.Visible;
-            SetConsoleHeight(ConsoleHost.Height);
+            SetConsoleHeight(double.IsFinite(settings.ConsoleHeight) ? settings.ConsoleHeight : 280);
             if (created != null) await created.InitializeAsync();
-            if (!closing && currentChat?.Id == sessionId && ConsolePanel.Visibility == Visibility.Visible) CurrentConsole?.Activate();
+            if (!closing && settings.ConsoleExpanded == true && currentChat?.Id == sessionId && ConsolePanel.Visibility == Visibility.Visible) CurrentConsole?.Activate();
         }
         catch (Exception ex) {
             if (created != null && consoles.TryGetValue(sessionId, out var active) && ReferenceEquals(active, created)) RemoveConsole(sessionId);

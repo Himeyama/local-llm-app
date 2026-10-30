@@ -9,6 +9,7 @@ public sealed class ChatSession
     public string Title { get; set; } = "新しいチャット";
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
     public string Workspace { get; set; } = "";
+    public string WorkspaceId { get; set; } = "";
     public bool ConsoleOpen { get; set; }
     public List<JsonObject> Messages { get; set; } = new();
     public int? ContextTokens { get; set; }
@@ -85,5 +86,44 @@ public sealed class ChatStore(string directory)
     public void Delete(ChatSession session)
     {
         lock (gate) { File.Delete(SessionPath(session)); consoleVisibility.Remove(session.Id); }
+    }
+}
+
+public sealed class ChatWorkspace
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Directory { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public bool IsDefault { get; set; }
+    public bool Expanded { get; set; } = true;
+    public string Name => !string.IsNullOrWhiteSpace(DisplayName) ? DisplayName : Path.GetFileName(Directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) is { Length: > 0 } name ? name : Directory;
+    public override string ToString() => Name;
+
+    public static ChatWorkspace EnsureDefault(List<ChatWorkspace> workspaces, string documentsDirectory)
+    {
+        var existing = workspaces.FirstOrDefault(w => w.IsDefault);
+        if (existing != null) return existing;
+        if (string.IsNullOrWhiteSpace(documentsDirectory)) throw new DirectoryNotFoundException("Documents フォルダーの場所を取得できません。");
+        var workspace = new ChatWorkspace { Directory = documentsDirectory, DisplayName = "デフォルト", IsDefault = true };
+        workspaces.Add(workspace);
+        return workspace;
+    }
+
+    public static List<ChatSession> Reconcile(List<ChatWorkspace> workspaces, IEnumerable<ChatSession> sessions, string defaultDirectory)
+    {
+        var changed = new List<ChatSession>();
+        foreach (var session in sessions) {
+            var workspace = workspaces.FirstOrDefault(w => w.Id == session.WorkspaceId);
+            if (workspace == null) {
+                var path = string.IsNullOrWhiteSpace(session.Workspace) ? defaultDirectory : session.Workspace;
+                workspace = workspaces.FirstOrDefault(w => string.Equals(w.Directory.TrimEnd('\\', '/'), path.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
+                if (workspace == null) { workspace = new ChatWorkspace { Directory = path }; workspaces.Add(workspace); }
+            }
+            if (session.WorkspaceId == workspace.Id && session.Workspace == workspace.Directory) continue;
+            session.WorkspaceId = workspace.Id;
+            session.Workspace = workspace.Directory;
+            changed.Add(session);
+        }
+        return changed;
     }
 }

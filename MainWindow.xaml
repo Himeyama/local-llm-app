@@ -85,9 +85,8 @@
           <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="ChatSectionChevron" Glyph="&#xE70D;" FontSize="10"/><TextBlock Text="チャット" FontSize="14" FontWeight="SemiBold"/></StackPanel>
         </Button>
         <Button x:Name="NewChatButton" Grid.Row="1" HorizontalAlignment="Stretch" Click="OnNewChat" AutomationProperties.Name="新しいチャット"><StackPanel Orientation="Horizontal" Spacing="10"><SymbolIcon Symbol="Add"/><TextBlock Text="新しいチャット"/></StackPanel></Button>
-        <ListView x:Name="SessionList" Grid.Row="2" SelectionChanged="OnSessionSelected" SelectionMode="Single" ContextRequested="OnSessionContextRequested" PreviewKeyDown="OnHistoryPreviewKeyDown">
-          <ListView.ItemTemplate><DataTemplate><StackPanel Padding="0,6"><TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis"/></StackPanel></DataTemplate></ListView.ItemTemplate>
-        </ListView>
+        <TreeView x:Name="SessionList" Grid.Row="2" SelectionMode="Single" CanDragItems="False" CanReorderItems="False" ItemInvoked="OnSessionInvoked"/>
+
         </Grid>
         <local:VerticalResizeHandle x:Name="GitResizeHandle" Grid.Row="3" Height="8" Visibility="Collapsed" HandleTemplate="{StaticResource VerticalResizeTemplate}" DragStarted="OnGitResizeStarted" DragDelta="OnGitResizeDelta" KeyDown="OnGitResizeKeyDown" AutomationProperties.Name="チャット履歴と Git の高さを調整" ToolTipService.ToolTip="ドラッグして高さを調整"/>
         <Grid x:Name="GitPanel" Grid.Row="4" Height="320" Visibility="Collapsed" SizeChanged="OnHistoryLayoutChanged"/>
@@ -164,14 +163,14 @@
             </StackPanel>
           </Grid>
           <Grid x:Name="ChatWorkspaceLayout" Grid.RowSpan="2" SizeChanged="OnChatWorkspaceSizeChanged">
-          <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <Grid x:Name="ChatPanel">
+            <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <Grid.ColumnDefinitions><ColumnDefinition x:Name="EditorColumn" Width="0"/><ColumnDefinition x:Name="EditorDividerColumn" Width="0"/><ColumnDefinition x:Name="ConversationColumn" Width="*"/></Grid.ColumnDefinitions>
             <Border x:Name="EditorPane" Visibility="Collapsed" BorderThickness="1" BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" Background="{ThemeResource TextControlBackground}" CornerRadius="8">
               <local:FileEditorView x:Name="FileEditor"/>
             </Border>
-            <local:HorizontalResizeHandle x:Name="EditorResizeHandle" Grid.Column="1" Visibility="Collapsed" HandleTemplate="{StaticResource HorizontalResizeTemplate}" DragStarted="OnEditorResizeStarted" DragDelta="OnEditorResizeDelta" KeyDown="OnEditorResizeKeyDown" AutomationProperties.Name="エディタとチャットの幅を調整" ToolTipService.ToolTip="ドラッグして左右の幅を調整"/>
-            <Grid Grid.Column="2">
+            <local:HorizontalResizeHandle x:Name="EditorResizeHandle" Grid.Column="1" Grid.RowSpan="2" Visibility="Collapsed" HandleTemplate="{StaticResource HorizontalResizeTemplate}" DragStarted="OnEditorResizeStarted" DragDelta="OnEditorResizeDelta" KeyDown="OnEditorResizeKeyDown" AutomationProperties.Name="エディタとチャットの幅を調整" ToolTipService.ToolTip="ドラッグして左右の幅を調整"/>
+            <Grid x:Name="ConversationPane" Grid.Column="2">
             <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" SizeChanged="OnChatSizeChanged" ViewChanged="OnChatViewChanged"><StackPanel x:Name="ChatMessages" Spacing="18" Padding="0,12,12,16"/></ScrollViewer>
             <Grid x:Name="ChatActivityPanel" Grid.Row="1" Visibility="Collapsed" Opacity="0.6" ColumnSpacing="6" SizeChanged="OnConsoleLayoutChanged">
@@ -203,7 +202,6 @@
                   <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8" Spacing="4">
                     <StackPanel.Resources><Style TargetType="Button"><Setter Property="Width" Value="40"/><Setter Property="Height" Value="40"/><Setter Property="Padding" Value="0"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="Transparent"/></Style></StackPanel.Resources>
                     <Button x:Name="AttachButton" Click="OnAttachImage" ToolTipService.ToolTip="画像を追加" AutomationProperties.Name="画像を追加"><SymbolIcon Symbol="Attach"/></Button>
-                    <Button x:Name="ChatWorkspaceButton" Click="OnChatWorkspaceSettings" ToolTipService.ToolTip="作業フォルダー設定" AutomationProperties.Name="作業フォルダー設定"><SymbolIcon Symbol="Folder"/></Button>
                     <Button x:Name="ChatToolsButton" Click="OnChatToolsSettings" ToolTipService.ToolTip="ツール設定" AutomationProperties.Name="ツール設定"><SymbolIcon Symbol="Repair"/></Button>
                   </StackPanel>
                   <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8" Spacing="4">
@@ -217,11 +215,11 @@
               </Grid>
             </Border>
             </Grid>
-          </Grid>
-          <Grid x:Name="ConsolePanel" Grid.Row="1" Visibility="Collapsed">
+          <Grid x:Name="ConsolePanel" Grid.Row="1" Grid.ColumnSpan="3" Visibility="Collapsed">
             <Grid.RowDefinitions><RowDefinition Height="8"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <local:VerticalResizeHandle HandleTemplate="{StaticResource VerticalResizeTemplate}" DragStarted="OnConsoleResizeStarted" DragDelta="OnConsoleResizeDelta" KeyDown="OnConsoleResizeKeyDown" AutomationProperties.Name="ターミナルの高さを調整" ToolTipService.ToolTip="ドラッグしてターミナルの高さを調整"/>
             <Border Grid.Row="1" Background="{ThemeResource TextControlBackground}" BorderBrush="{ThemeResource TextControlBorderBrush}" BorderThickness="1" CornerRadius="8"><Grid x:Name="ConsoleHost" Height="280"/></Border>
+          </Grid>
           </Grid>
           </Grid>
         </Grid>

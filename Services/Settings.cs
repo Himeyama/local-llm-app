@@ -7,6 +7,8 @@ public sealed class Settings
 {
     [JsonIgnore]
     public string RepositoryRoot => ResolveRoot(AppContext.BaseDirectory);
+    [JsonIgnore]
+    public string DefaultWorkspaceDirectory => Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
     public const string DefaultModelPath = @"models\Qwen3.8-27B-Uncensored\Qwen3.8-27B-Uncensored-Q4_K_M.gguf";
     public const string DefaultMmprojPath = @"models\Qwen3.8-27B-Uncensored\mmproj-Qwen3.8-27B-Uncensored-F16.gguf";
     public const string DefaultServerExe = @"runtime\llama.cpp\llama-server.exe";
@@ -26,8 +28,25 @@ public sealed class Settings
     public bool InvestigationShowReasoning { get; set; } = false;
     public bool EditorAutoSave { get; set; } = true;
     public bool EditorWordWrap { get; set; } = true;
+    public bool? ConsoleExpanded { get; set; }
+    public double ConsoleHeight { get; set; } = 280;
+    public double EditorWidthRatio { get; set; } = 0.5;
+    public double ExplorerPaneHeight { get; set; } = 240;
+    public double GitPaneHeight { get; set; } = 320;
+    public bool ExplorerSectionExpanded { get; set; } = true;
+    public bool ChatSectionExpanded { get; set; } = true;
+    public bool GitSectionExpanded { get; set; } = true;
+    public bool DefaultWorkspaceInitialized { get; set; }
+    public List<ChatWorkspace> ChatWorkspaces { get; set; } = new();
     public string LastChatId { get; set; } = "";
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LocalLlmGui");
+    public void EnsureDefaultWorkspace()
+    {
+        if (DefaultWorkspaceInitialized) return;
+        ChatWorkspace.EnsureDefault(ChatWorkspaces, DefaultWorkspaceDirectory);
+        DefaultWorkspaceInitialized = true;
+    }
+
     public static Settings Load()
     {
         var path = Path.Combine(DataDirectory, "settings.json");

@@ -13,13 +13,14 @@ public sealed partial class MainWindow
 
     private void InitializeEditor()
     {
+        editorRatio = double.IsFinite(settings.EditorWidthRatio) ? Math.Clamp(settings.EditorWidthRatio, 0.05, 0.95) : 0.5;
         FileEditor.AutoSaveEnabled = settings.EditorAutoSave;
         FileEditor.WordWrapEnabled = settings.EditorWordWrap;
         FileEditor.Changed += UpdateEditorLayout;
         FileEditor.Failed += message => { if (!closing) ShowError("エディタ: " + message); };
         ExplorerPane.FileOpenRequested += path => _ = FileEditor.OpenAsync(path);
         ExplorerPane.PathRenamed += FileEditor.RemapPaths;
-        ExplorerPane.ExpansionChanged += UpdateHistoryLayout;
+        ExplorerPane.ExpansionChanged += OnExplorerExpansionChanged;
         AppWindow.Closing += async (_, args) => {
             if (editorCloseAccepted || !FileEditor.HasPendingChanges) return;
             args.Cancel = true;
@@ -45,6 +46,9 @@ public sealed partial class MainWindow
             if (visible) ApplyEditorRatio();
             else { EditorColumn.Width = new GridLength(0); ConversationColumn.Width = new GridLength(1, GridUnitType.Star); }
         }
+        Grid.SetRowSpan(ConversationPane, visible ? 2 : 1);
+        Grid.SetColumnSpan(ConsolePanel, visible ? 1 : 3);
+        ApplyConsoleHeight();
         EditorStatus.Visibility = visible && page == "chat" ? Visibility.Visible : Visibility.Collapsed;
         if (FileEditor.ActiveDocument is { } document) {
             EditorEncodingButton.Content = document.Encoding.Label;
@@ -61,9 +65,9 @@ public sealed partial class MainWindow
     private void ApplyEditorRatio()
     {
         var available = ChatPanel.ActualWidth - 8;
-        if (available > 0) editorRatio = Math.Clamp(editorRatio, Math.Min(240, available * 0.4) / available, 1 - Math.Min(320, available * 0.4) / available);
-        EditorColumn.Width = new GridLength(editorRatio, GridUnitType.Star);
-        ConversationColumn.Width = new GridLength(1 - editorRatio, GridUnitType.Star);
+        var ratio = available > 0 ? Math.Clamp(editorRatio, Math.Min(240, available * 0.4) / available, 1 - Math.Min(320, available * 0.4) / available) : editorRatio;
+        EditorColumn.Width = new GridLength(ratio, GridUnitType.Star);
+        ConversationColumn.Width = new GridLength(1 - ratio, GridUnitType.Star);
     }
 
     private void OnEditorResizeStarted(object sender, DragStartedEventArgs args) { editorDragWidth = EditorPane.ActualWidth; editorDragDistance = 0; }
@@ -72,12 +76,13 @@ public sealed partial class MainWindow
         editorDragDistance += args.HorizontalChange;
         var available = ChatPanel.ActualWidth - 8;
         if (available <= 0) return;
-        editorRatio = (editorDragWidth + editorDragDistance) / available; ApplyEditorRatio();
+        editorRatio = Math.Clamp((editorDragWidth + editorDragDistance) / available, Math.Min(240, available * 0.4) / available, 1 - Math.Min(320, available * 0.4) / available);
+        ApplyEditorRatio(); SaveWorkspacePaneLayout();
     }
     private void OnEditorResizeKeyDown(object sender, KeyRoutedEventArgs args)
     {
         if (args.Key is not (VirtualKey.Left or VirtualKey.Right)) return;
-        args.Handled = true; editorRatio += args.Key == VirtualKey.Right ? 0.03 : -0.03; ApplyEditorRatio();
+        args.Handled = true; editorRatio = Math.Clamp(editorRatio + (args.Key == VirtualKey.Right ? 0.03 : -0.03), 0.05, 0.95); ApplyEditorRatio(); SaveWorkspacePaneLayout();
     }
     private async void OnEditorEncodingClick(object sender, RoutedEventArgs args) => await FileEditor.ChangeEncodingAsync();
     private async void OnEditorLineEndingClick(object sender, RoutedEventArgs args) => await FileEditor.ChangeLineEndingAsync();

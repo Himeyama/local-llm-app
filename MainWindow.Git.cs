@@ -66,6 +66,8 @@ public sealed partial class MainWindow
         Grid.SetRow(commitRow, 1); gitSectionBody.Children.Add(commitRow);
         var lists = new Grid { RowSpacing = 4 };
         gitStage.Content = new SymbolIcon(Symbol.Add); gitUnstage.Content = new SymbolIcon(Symbol.Remove);
+        gitStage.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        gitStage.BorderThickness = new Thickness(0);
         foreach (var button in new[] { gitStage, gitUnstage }) { button.MinWidth = button.MinHeight = 24; button.Padding = new Thickness(4); }
         ToolTipService.SetToolTip(gitStage, "すべての変更をステージ"); ToolTipService.SetToolTip(gitUnstage, "すべてのステージを解除");
         foreach (var height in new[] { GridLength.Auto, new GridLength(1, GridUnitType.Star), GridLength.Auto, new GridLength(1, GridUnitType.Star) }) lists.RowDefinitions.Add(new RowDefinition { Height = height });

@@ -35,76 +35,140 @@ public sealed partial class MainWindow
 
     private void InitializeChat()
     {
+        SessionList.ContextRequested += OnWorkspaceTreeContext;
+        SessionList.Expanding += (_, args) => { if (!selectingSession && args.Node.Content is ChatWorkspace w) { w.Expanded = true; try { settings.Save(); } catch (Exception ex) { ShowError(ex.Message); } } };
+        SessionList.Collapsed += (_, args) => { if (!selectingSession && args.Node.Content is ChatWorkspace w) { w.Expanded = false; try { settings.Save(); } catch (Exception ex) { ShowError(ex.Message); } } };
         RootLayout.Loaded += (_, _) => RestoreConsoleVisibility();
         chatSpinnerTimer.Tick += (_, _) => { chatSpinnerFrame = (chatSpinnerFrame + 1) % ChatSpinnerFrames.Length; ChatActivitySpinner.Text = ChatSpinnerFrames[chatSpinnerFrame].ToString(); };
         try { chatSessions.AddRange(chatStore.Load()); }
         catch (Exception e) { ShowError("履歴を読み込めません: " + e.Message); }
+        try { MigrateChatWorkspaces(); }
+        catch (Exception ex) { ShowError("ワークスペースを読み込めません: " + ex.Message); }
         currentChat = chatSessions.FirstOrDefault(session => session.Id == settings.LastChatId) ?? chatSessions.FirstOrDefault();
-        if (currentChat == null) CreateChat();
-        else { RefreshSessions(); RenderConversation(); }
+        if (settings.ConsoleExpanded == null) {
+            settings.ConsoleExpanded = currentChat?.ConsoleOpen ?? false;
+            SaveWorkspacePaneLayout();
+        }
+        RefreshSessions(); RenderConversation();
         Closed += (_, _) => { chatSpinnerTimer.Stop(); chatCancellation?.Cancel(); chatHttp.Dispose(); CloseConsoles(); };
+    }
+
+    private void MigrateChatWorkspaces()
+    {
+        settings.EnsureDefaultWorkspace();
+        foreach (var session in ChatWorkspace.Reconcile(settings.ChatWorkspaces, chatSessions, settings.DefaultWorkspaceDirectory))
+            chatStore.Save(session, updateTimestamp: false);
+        settings.Save();
     }
 
     private void RefreshSessions()
     {
         selectingSession = true;
-        SessionList.ItemsSource = null;
-        SessionList.ItemsSource = chatSessions.OrderByDescending(s => s.UpdatedAt).ToList();
-        SessionList.SelectedItem = currentChat;
+        SessionList.RootNodes.Clear();
+        foreach (var workspace in settings.ChatWorkspaces) {
+            var root = new TreeViewNode { Content = workspace, IsExpanded = workspace.Expanded };
+            foreach (var session in chatSessions.Where(s => s.WorkspaceId == workspace.Id).OrderByDescending(s => s.UpdatedAt)) {
+                var child = new TreeViewNode { Content = session };
+                root.Children.Add(child);
+            }
+            SessionList.RootNodes.Add(root);
+            if (root.Children.FirstOrDefault(n => ReferenceEquals(n.Content, currentChat)) is { } selected) SessionList.SelectedNode = selected;
+        }
         selectingSession = false;
     }
 
-    private void CreateChat()
+    private void OnSessionInvoked(TreeView sender, TreeViewItemInvokedEventArgs args)
+    {
+        if (args.InvokedItem is not TreeViewNode node) return;
+        if (node.Content is ChatWorkspace) { node.IsExpanded = !node.IsExpanded; return; }
+        if (node.Content is ChatSession session) SelectChat(session);
+    }
+
+    private void OnWorkspaceTreeContext(UIElement sender, ContextRequestedEventArgs args)
+    {
+        if (chatCancellation != null || handlingChatCommand) return;
+        var source = args.OriginalSource as DependencyObject;
+        while (source != null && source != SessionList) {
+            if (source is TreeViewItem item && SessionList.NodeFromContainer(item) is { } node) {
+                var menu = new MenuFlyout();
+                if (node.Content is ChatWorkspace workspace) {
+                    var add = new MenuFlyoutItem { Text = "セッションを追加", Icon = new SymbolIcon(Symbol.Add) };
+                    add.Click += (_, _) => Execute(() => CreateChat(workspace));
+                    menu.Items.Add(add);
+                    var configure = new MenuFlyoutItem { Text = "作業ディレクトリを設定", Icon = new SymbolIcon(Symbol.Folder) };
+                    configure.Click += async (_, _) => await ConfigureWorkspaceAsync(workspace);
+                    menu.Items.Add(configure);
+                    menu.Items.Add(new MenuFlyoutSeparator());
+                    var deleteWorkspace = new MenuFlyoutItem { Text = "削除", Icon = new SymbolIcon(Symbol.Delete) };
+                    deleteWorkspace.Click += async (_, _) => await DeleteWorkspaceAsync(workspace);
+                    menu.Items.Add(deleteWorkspace);
+                }
+                else if (node.Content is ChatSession session) {
+                    var delete = new MenuFlyoutItem { Text = "削除", Icon = new SymbolIcon(Symbol.Delete) };
+                    delete.Click += async (_, _) => await DeleteChatAsync(session);
+                    menu.Items.Add(delete);
+                }
+                menu.ShowAt(item); args.Handled = true; return;
+            }
+            source = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(source);
+        }
+    }
+
+    private void CreateChat(ChatWorkspace workspace)
     {
         if (currentChat != null) drafts[currentChat.Id] = ChatInput.Text;
-        currentChat = new ChatSession { Workspace = currentChat?.Workspace ?? settings.RepositoryRoot };
-        chatSessions.Add(currentChat);
-        try { chatStore.Save(currentChat); } catch (Exception ex) { ShowError("チャットを保存できません: " + ex.Message); }
+        workspace.Expanded = true;
+        settings.Save();
+        var created = new ChatSession { Workspace = workspace.Directory, WorkspaceId = workspace.Id };
+        chatStore.Save(created);
+        currentChat = created;
+        chatSessions.Add(created);
         attachments.Clear(); AttachmentList.Children.Clear(); AttachmentList.Visibility = Visibility.Collapsed; ChatInput.Text = "";
         SetChatActivity("");
         RefreshSessions(); RenderConversation();
         page = "chat"; BuildPage();
     }
 
-    private void OnNewChat(object sender, RoutedEventArgs e) { if (chatCancellation == null && !handlingChatCommand) CreateChat(); }
-
-    private void OnSessionContextRequested(UIElement sender, ContextRequestedEventArgs args)
+    private async void OnNewChat(object sender, RoutedEventArgs e)
     {
-        if (chatCancellation != null) return;
-        var source = args.OriginalSource as DependencyObject;
-        while (source != null && source != SessionList)
-        {
-            if (source is FrameworkElement { DataContext: ChatSession session } target)
-            {
-                ShowSessionContextMenu(session, target, args.TryGetPosition(SessionList, out var position) ? position : null);
-                args.Handled = true;
-                return;
+        if (chatCancellation != null || handlingChatCommand) return;
+        await ConfigureWorkspaceAsync(null);
+    }
+
+    private async Task DeleteWorkspaceAsync(ChatWorkspace workspace)
+    {
+        if (chatCancellation != null || handlingChatCommand || !settings.ChatWorkspaces.Contains(workspace)) return;
+        try {
+            var members = chatSessions.Where(s => s.WorkspaceId == workspace.Id).ToList();
+            var dialog = new ContentDialog {
+                XamlRoot = RootLayout.XamlRoot, Title = "ワークスペースを削除しますか？",
+                Content = new TextBlock { Text = $"「{workspace.Name}」と所属する {members.Count} 件のセッションの会話履歴・添付画像を削除します。\n作業ディレクトリ内のファイルは保持します。\n{workspace.Directory}", TextWrapping = TextWrapping.Wrap },
+                PrimaryButtonText = "削除", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Close
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary || closing || chatCancellation != null || handlingChatCommand) return;
+            foreach (var session in members) {
+                chatStore.Delete(session);
+                RemoveConsole(session.Id);
+                chatSessions.Remove(session); drafts.Remove(session.Id); pendingMessages.Remove(session.Id);
             }
-            source = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(source);
+            var index = settings.ChatWorkspaces.IndexOf(workspace);
+            settings.ChatWorkspaces.Remove(workspace);
+            try { settings.Save(); }
+            catch { settings.ChatWorkspaces.Insert(index, workspace); throw; }
         }
-        if (!args.TryGetPosition(SessionList, out _) && SessionList.SelectedItem is ChatSession selected)
-        {
-            ShowSessionContextMenu(selected, SessionList.ContainerFromItem(selected) as FrameworkElement ?? SessionList, null);
-            args.Handled = true;
+        catch (Exception ex) { if (!closing) ShowError("ワークスペースを削除できません: " + ex.Message); }
+        finally {
+            if (!closing) {
+                if (currentChat != null && !chatSessions.Contains(currentChat)) {
+                    currentChat = chatSessions.OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
+                    attachments.Clear(); AttachmentList.Children.Clear(); AttachmentList.Visibility = Visibility.Collapsed;
+                    ChatInput.Text = currentChat == null ? "" : drafts.GetValueOrDefault(currentChat.Id, "");
+                    followChat = true; SetChatActivity("");
+                    RenderConversation(); BuildPage();
+                }
+                RefreshSessions();
+            }
         }
-    }
-
-    private void OnHistoryPreviewKeyDown(object sender, KeyRoutedEventArgs args)
-    {
-        if (args.Key != Windows.System.VirtualKey.F10 || chatCancellation != null || SessionList.SelectedItem is not ChatSession session ||
-            !Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down)) return;
-        args.Handled = true;
-        ShowSessionContextMenu(session, SessionList.ContainerFromItem(session) as FrameworkElement ?? SessionList, null);
-    }
-
-    private void ShowSessionContextMenu(ChatSession session, FrameworkElement target, Windows.Foundation.Point? position)
-    {
-        var menu = new MenuFlyout();
-        var delete = new MenuFlyoutItem { Text = "削除", Icon = new SymbolIcon(Symbol.Delete) };
-        delete.Click += async (_, _) => await DeleteChatAsync(session);
-        menu.Items.Add(delete);
-        if (position.HasValue) menu.ShowAt(SessionList, new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions { Position = position.Value });
-        else menu.ShowAt(target);
     }
 
     private async Task DeleteChatAsync(ChatSession session)
@@ -125,7 +189,6 @@ public sealed partial class MainWindow
                 attachments.Clear(); AttachmentList.Children.Clear(); AttachmentList.Visibility = Visibility.Collapsed;
                 ChatInput.Text = currentChat == null ? "" : drafts.GetValueOrDefault(currentChat.Id, "");
                 followChat = true; SetChatActivity("");
-                if (currentChat == null) { CreateChat(); return; }
                 RenderConversation(); BuildPage();
             }
             RefreshSessions();
@@ -133,9 +196,9 @@ public sealed partial class MainWindow
         catch (Exception ex) { if (!closing) ShowError("チャットを削除できません: " + ex.Message); }
     }
 
-    private void OnSessionSelected(object sender, SelectionChangedEventArgs e)
+    private void SelectChat(ChatSession session)
     {
-        if (selectingSession || chatCancellation != null || handlingChatCommand || SessionList.SelectedItem is not ChatSession session) return;
+        if (selectingSession || chatCancellation != null || handlingChatCommand) return;
         if (currentChat != null) drafts[currentChat.Id] = ChatInput.Text;
         currentChat = session; ChatInput.Text = drafts.GetValueOrDefault(session.Id, "");
         followChat = true;
@@ -148,7 +211,11 @@ public sealed partial class MainWindow
     {
         UpdateChatStatus();
         UpdateGitControls();
-        if (currentChat == null) return;
+        if (currentChat == null) {
+            SendChatButton.IsEnabled = StopChatButton.IsEnabled = ChatInput.IsEnabled = AttachButton.IsEnabled = false;
+            NewChatButton.IsEnabled = SessionList.IsEnabled = true;
+            return;
+        }
         bool busy = chatCancellation != null || handlingChatCommand;
         SendChatButton.IsEnabled = !gitBusy && (serverStatus.IsConnected || ChatCommands.Parse(ChatInput.Text) == "clear");
         StopChatButton.IsEnabled = chatCancellation != null || chatCommandCancellation != null;
@@ -156,7 +223,6 @@ public sealed partial class MainWindow
         StopChatButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         NewChatButton.IsEnabled = !busy;
         SessionList.IsEnabled = !busy;
-        ChatWorkspaceButton.IsEnabled = !busy;
         ChatToolsButton.IsEnabled = !busy;
         ChatReasoningButton.IsEnabled = !busy;
         UpdateReasoningVisibilityButton();
@@ -175,7 +241,13 @@ public sealed partial class MainWindow
 
     private void RenderConversation()
     {
-        if (closing || currentChat == null) return;
+        if (closing) return;
+        if (currentChat == null) {
+            ChatMessages.Children.Clear();
+            ChatMessages.Children.Add(new TextBlock { Text = "ワークスペースを右クリックして「セッションを追加」、または「新しいチャット」からワークスペースを作成してください。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 32, 0, 12) });
+            RefreshWorkspaceExplorer(); RestoreConsoleVisibility(); UpdateChatControls();
+            return;
+        }
         if (settings.LastChatId != currentChat.Id) {
             settings.LastChatId = currentChat.Id;
             try { settings.Save(); } catch (Exception ex) { ShowError("開いているチャットを記憶できません: " + ex.Message); }
@@ -184,7 +256,6 @@ public sealed partial class MainWindow
         RefreshWorkspaceExplorer();
         RestoreConsoleVisibility();
         RenderPendingMessages();
-        ToolTipService.SetToolTip(ChatWorkspaceButton, "作業フォルダー設定\n" + currentChat.Workspace);
         ChatMessages.Children.Clear(); streamingText = null;
         if (currentChat.Summary.Length > 0)
             ChatMessages.Children.Add(new Expander { Header = "会話の要約", Content = RenderMarkdown(currentChat.Summary), HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
@@ -327,13 +398,12 @@ public sealed partial class MainWindow
         catch { image.Visibility = Visibility.Collapsed; }
     }
 
-    private async void OnChatWorkspaceSettings(object sender, RoutedEventArgs e)
+    private async Task ConfigureWorkspaceAsync(ChatWorkspace? workspace)
     {
-        if (currentChat == null || chatCancellation != null) return;
+        if (chatCancellation != null || handlingChatCommand) return;
         try
         {
-            var session = currentChat;
-            var input = new TextBox { Header = "作業フォルダー", Text = session.Workspace, MinWidth = 320, TextWrapping = TextWrapping.Wrap };
+            var input = new TextBox { Header = "作業ディレクトリ", Text = workspace?.Directory ?? settings.DefaultWorkspaceDirectory, MinWidth = 320, TextWrapping = TextWrapping.Wrap };
             var browse = new Button { Content = "フォルダーを選択" };
             var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
             var content = new StackPanel { Spacing = 12 }; content.Children.Add(input); content.Children.Add(browse); content.Children.Add(error);
@@ -347,21 +417,35 @@ public sealed partial class MainWindow
                 }
                 catch (Exception ex) { error.Text = ex.Message; error.Visibility = Visibility.Visible; }
             };
-            var dialog = new ContentDialog { XamlRoot = RootLayout.XamlRoot, Title = "作業フォルダー設定", Content = content,
-                PrimaryButtonText = "保存", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Primary };
+            var dialog = new ContentDialog { XamlRoot = RootLayout.XamlRoot, Title = workspace == null ? "ワークスペースを作成" : "作業ディレクトリを設定", Content = content,
+                PrimaryButtonText = workspace == null ? "作成" : "保存", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Primary };
             dialog.PrimaryButtonClick += (_, args) => {
-                var previous = session.Workspace;
                 try
                 {
                     if (string.IsNullOrWhiteSpace(input.Text)) throw new IOException("作業フォルダーを指定してください。");
-                    var path = Path.GetFullPath(Environment.ExpandEnvironmentVariables(input.Text.Trim()), settings.RepositoryRoot);
+                    var path = Path.GetFullPath(Environment.ExpandEnvironmentVariables(input.Text.Trim()), settings.DefaultWorkspaceDirectory);
                     if (!Directory.Exists(path)) throw new DirectoryNotFoundException("フォルダーが見つかりません。");
-                    session.Workspace = path; chatStore.Save(session);
+                    if (workspace == null) {
+                        var created = new ChatWorkspace { Directory = path };
+                        settings.ChatWorkspaces.Add(created);
+                        try { settings.Save(); }
+                        catch { settings.ChatWorkspaces.Remove(created); throw; }
+                        CreateChat(created);
+                    }
+                    else {
+                        var previous = workspace.Directory;
+                        workspace.Directory = path;
+                        try { settings.Save(); }
+                        catch { workspace.Directory = previous; throw; }
+                        foreach (var member in chatSessions.Where(s => s.WorkspaceId == workspace.Id)) {
+                            member.Workspace = path; chatStore.Save(member, updateTimestamp: false);
+                        }
+                        RefreshSessions();
+                    }
                     RefreshWorkspaceExplorer();
                     RestoreConsoleVisibility();
-                    ToolTipService.SetToolTip(ChatWorkspaceButton, "作業フォルダー設定\n" + path);
                 }
-                catch (Exception ex) { session.Workspace = previous; args.Cancel = true; error.Text = ex.Message; error.Visibility = Visibility.Visible; }
+                catch (Exception ex) { args.Cancel = true; error.Text = ex.Message; error.Visibility = Visibility.Visible; }
             };
             await dialog.ShowAsync();
         }
@@ -624,7 +708,7 @@ public sealed partial class MainWindow
             var tools = new ChatTools(session.Workspace, settings.ChatWebEnabled, settings.ChatWritesEnabled, allowCommands: settings.ChatCommandsEnabled);
             var reasoningEffort = settings.ChatReasoningEffort;
             // Generation owns a separate transcript; the UI receives stable snapshots.
-            generationSession = new ChatSession { Id = session.Id, Title = session.Title, Workspace = session.Workspace,
+            generationSession = new ChatSession { Id = session.Id, Title = session.Title, Workspace = session.Workspace, WorkspaceId = session.WorkspaceId,
                 Summary = session.Summary, Messages = session.Messages.Select(m => (JsonObject)m.DeepClone()).ToList() };
             await Task.Run(() => new ChatClient(chatHttp).GenerateAsync(generationSession, tools, progress, () => {
                 chatStore.Save(generationSession);

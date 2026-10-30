@@ -44,8 +44,11 @@ public sealed partial class WorkspaceExplorerView : Grid
     }
 
     private void OnToggleSection(object sender, RoutedEventArgs args)
+        => SetExpanded(!IsExpanded);
+
+    public void SetExpanded(bool expanded)
     {
-        IsExpanded = !IsExpanded;
+        IsExpanded = expanded;
         ExplorerTree.Visibility = IsExpanded ? Visibility.Visible : Visibility.Collapsed;
         ExplorerStatus.Visibility = IsExpanded && ExplorerStatus.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         ExplorerSectionChevron.Glyph = IsExpanded ? "\uE70D" : "\uE76C";

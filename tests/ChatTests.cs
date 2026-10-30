@@ -144,11 +144,16 @@ try
     Console.WriteLine("PASS: UTF-8 file create/read/search/edit, backups, traversal/junction protection, ambiguous edit, binary and disabled tool rejection, public URL checks");
 
     var store = new ChatStore(Path.Combine(root, "history"));
-    var session = new ChatSession { Workspace = root, Title = "画像チャット", Messages = new() { Args("{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"画像を確認\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,AAAA\"}}]}" ) } };
+    var session = new ChatSession { Workspace = root, WorkspaceId = Guid.NewGuid().ToString("N"), Title = "画像チャット", Messages = new() { Args("{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"画像を確認\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,AAAA\"}}]}" ) } };
     store.Save(session); File.WriteAllText(Path.Combine(root, "history/broken.json"), "{broken");
     var reloaded = store.Load().Single();
     Assert(reloaded.Id == session.Id && reloaded.Messages[0].ToJsonString() == session.Messages[0].ToJsonString(), "History/image roundtrip failed");
-    Console.WriteLine("PASS: session persistence, image content roundtrip, corrupted history isolation");
+    Assert(reloaded.WorkspaceId == session.WorkspaceId, "Workspace membership must survive session reload");
+    Assert(ChatCommands.Clear(session).WorkspaceId == session.WorkspaceId, "Clear must retain workspace membership");
+    var workspaceSettings = new Settings { ChatWorkspaces = new() { new ChatWorkspace { Id = session.WorkspaceId, Directory = root, Expanded = false } } };
+    var restoredWorkspaces = System.Text.Json.JsonSerializer.Deserialize<Settings>(System.Text.Json.JsonSerializer.Serialize(workspaceSettings))!.ChatWorkspaces;
+    Assert(restoredWorkspaces.Single().Id == session.WorkspaceId && restoredWorkspaces.Single().Directory == root && !restoredWorkspaces.Single().Expanded, "Workspace directory, identity and expansion must persist");
+    Console.WriteLine("PASS: session persistence, workspace membership and expansion, image content roundtrip, corrupted history isolation");
     var disposableSession = new ChatSession { Title = "削除テスト" }; store.Save(disposableSession);
     store.Delete(disposableSession);
     Assert(store.Load().Count == 1 && store.Load().Single().Id == session.Id, "Delete must preserve other sessions");
