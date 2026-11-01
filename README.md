@@ -2,7 +2,7 @@
 
 WinUI 3 / C# / .NET 8 のローカル LLM を扱う Windows アプリです。このリポジトリ内のスクリプト、モデル、llama.cpp を使い、アプリ内のチャットから直接接続します。
 
-<img width="600" src="https://github.com/user-attachments/assets/872b5c0f-1a7b-49b1-9fd7-63f2db3fbfbf" />
+<img width="600" src="https://github.com/user-attachments/assets/9bccc573-a60b-4146-b462-f18ffe5993a2" />
 
 ## 起動
 
