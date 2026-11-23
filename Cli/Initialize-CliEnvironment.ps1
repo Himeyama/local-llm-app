@@ -22,5 +22,9 @@ if (Test-Path -LiteralPath $cliCodexRoot -PathType Container) {
         }
     }
 }
+$cliBundledNode = Join-Path (Split-Path -Parent $PSScriptRoot) 'runtime\node'
+if (Test-Path -LiteralPath (Join-Path $cliBundledNode 'node.exe') -PathType Leaf) {
+    $cliPathEntries = @($cliBundledNode) + $cliPathEntries
+}
 $env:PATH = (($cliPathEntries | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { [Environment]::ExpandEnvironmentVariables($_.Trim()) } | Select-Object -Unique) -join ';')

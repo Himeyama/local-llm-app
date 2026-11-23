@@ -152,6 +152,10 @@ public sealed partial class WorkspaceExplorerView
         try { canPaste = entry.CanExpand && Clipboard.GetContent().Contains(StandardDataFormats.StorageItems); }
         catch (Exception) { canPaste = false; }
         var menu = new MenuFlyout();
+        if (!entry.IsDirectory && BrowserFiles.IsHtml(entry.Path)) {
+            AddMenu(menu, "編集", "\uE70F", () => { FileEditRequested?.Invoke(entry.Path); return Task.CompletedTask; });
+            menu.Items.Add(new MenuFlyoutSeparator());
+        }
         if (entry.IsDirectory) {
             AddMenu(menu, "新しいファイル", "\uE7C3", () => CreateItemAsync(false, entry.Path));
             AddMenu(menu, "新しいフォルダー", "\uED41", () => CreateItemAsync(true, entry.Path));

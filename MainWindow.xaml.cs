@@ -39,6 +39,7 @@ public sealed partial class MainWindow : Window
         ResizeInitialWindow();
         try { settings = Settings.Load(); } catch (Exception e) { ShowError("設定ファイルを読み込めません: " + e.Message); }
         activeServerLanAccess = settings.ServerLanAccess;
+        ApplyAppScale();
         runner.Log += message => DispatcherQueue.TryEnqueue(() => {
             AddLog(message);
             if (message.StartsWith("[llama-server] ", StringComparison.Ordinal)) { serverStatus.ObserveLog(message); UpdateStatus(); }
@@ -66,6 +67,16 @@ public sealed partial class MainWindow : Window
         BuildPage();
         timer.Start();
         _ = RefreshStatusAsync();
+    }
+
+    private void OnScaleHostSizeChanged(object sender, SizeChangedEventArgs args) => ApplyAppScale();
+
+    private void ApplyAppScale()
+    {
+        if (RootLayout == null || ScaleHost.ActualWidth <= 0 || ScaleHost.ActualHeight <= 0) return;
+        // Measure at the logical size before scaling so all panes fit inside the window.
+        RootLayout.Width = ScaleHost.ActualWidth / settings.AppScale;
+        RootLayout.Height = ScaleHost.ActualHeight / settings.AppScale;
     }
 
     private void InitializeWindowChrome()
@@ -284,6 +295,16 @@ public sealed partial class MainWindow : Window
         switch (page)
         {
             case "server":
+                var scaleOptions = new[] { 75, 80, 90, 100, 110, 125, 150 };
+                var appScale = SettingCard("表示倍率", "文字・ボタン・余白を含むアプリ全体の倍率。変更はすぐに反映され、自動保存されます。",
+                    new ComboBox { ItemsSource = scaleOptions.Select(value => $"{value}%").ToArray(), SelectedIndex = Array.IndexOf(scaleOptions, (int)Math.Round(settings.AppScale * 100)) });
+                appScale.SelectionChanged += (_, _) => Execute(() => {
+                    if (appScale.SelectedIndex < 0) return;
+                    settings.AppScale = scaleOptions[appScale.SelectedIndex] / 100.0;
+                    ApplyAppScale();
+                    settings.Save();
+                });
+                BeginSettingGroup();
                 var lanAccess = SettingCard("LAN に公開", "LAN 内で llama-server と Codex を利用できます。変更は自動保存され、次回起動時に反映されます。",
                     new ToggleSwitch { OnContent = "オン", OffContent = "オフ", IsOn = settings.ServerLanAccess });
                 lanAccess.Toggled += (_, _) => Execute(() => {
@@ -294,11 +315,11 @@ public sealed partial class MainWindow : Window
                 BeginSettingGroup();
                 var context = SettingCard("コンテキスト長", "65,536 ～ 1,000,000。Claude で使用する場合は 100,000 以上。", Number("コンテキスト長", settings.ContextSize, 65536, 1000000));
                 var threads = SettingCard("CPU スレッド", "処理に使用する CPU スレッド数。", Number("CPU スレッド", settings.Threads, 1, 512));
-                var mtp = SettingCard("MTP draft tokens", "0 にすると無効になります。", Number("MTP draft tokens", settings.MtpDraftTokens, 0, 16));
+                var mtp = SettingCard("MTP draft tokens", "標準の Rust 基盤では無効です。llama.cpp 使用時は 0 で無効になります。", Number("MTP draft tokens", settings.MtpDraftTokens, 0, 16));
                 BeginSettingGroup();
                 var model = SettingCard("モデル", "GGUF モデルの絶対パス。", Input("モデルの絶対パス", AssetPath(settings.ModelPath, Settings.DefaultModelPath)));
-                var mmproj = SettingCard("画像入力用 mmproj", "モデルに対応する mmproj の絶対パス。", Input("対応する mmproj の絶対パス", AssetPath(settings.MmprojPath, Settings.DefaultMmprojPath)));
-                var exe = SettingCard("llama-server.exe", "実行ファイルの絶対パス。", Input("llama-server.exe の絶対パス", AssetPath(settings.ServerExe, Settings.DefaultServerExe)));
+                var mmproj = SettingCard("画像入力用 mmproj", "llama.cpp 使用時のみ。標準の Rust 基盤はテキスト専用です。", Input("対応する mmproj の絶対パス", AssetPath(settings.MmprojPath, Settings.DefaultMmprojPath)));
+                var exe = SettingCard("推論サーバー", "標準は同梱の Rust / ROCm 基盤です。互換サーバーの実行ファイルも指定できます。", Input("推論サーバーの絶対パス", AssetPath(settings.ServerExe, Settings.DefaultServerExe)));
                 serverLaunchInputs = new[] { model, mmproj, exe };
                 saveServerSettings = () => {
                     var contextValue = Read(context); var threadsValue = Read(threads); var mtpValue = Read(mtp);

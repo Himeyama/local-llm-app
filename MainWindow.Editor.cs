@@ -18,7 +18,14 @@ public sealed partial class MainWindow
         FileEditor.WordWrapEnabled = settings.EditorWordWrap;
         FileEditor.Changed += UpdateEditorLayout;
         FileEditor.Failed += message => { if (!closing) ShowError("エディタ: " + message); };
-        ExplorerPane.FileOpenRequested += path => _ = FileEditor.OpenAsync(path);
+        ExplorerPane.FileOpenRequested += async path => {
+            try {
+                if (Services.BrowserFiles.CanPreview(path)) await FileEditor.OpenBrowserFileAsync(path);
+                else await FileEditor.OpenAsync(path);
+            }
+            catch (Exception ex) { ShowError("ファイルを開けません: " + ex.Message); }
+        };
+        ExplorerPane.FileEditRequested += path => _ = FileEditor.OpenAsync(path);
         ExplorerPane.PathRenamed += FileEditor.RemapPaths;
         ExplorerPane.ExpansionChanged += OnExplorerExpansionChanged;
         AppWindow.Closing += async (_, args) => {
@@ -49,7 +56,7 @@ public sealed partial class MainWindow
         Grid.SetRowSpan(ConversationPane, visible ? 2 : 1);
         Grid.SetColumnSpan(ConsolePanel, visible ? 1 : 3);
         ApplyConsoleHeight();
-        EditorStatus.Visibility = visible && page == "chat" ? Visibility.Visible : Visibility.Collapsed;
+        EditorStatus.Visibility = visible && page == "chat" && FileEditor.ActiveDocument != null ? Visibility.Visible : Visibility.Collapsed;
         if (FileEditor.ActiveDocument is { } document) {
             EditorEncodingButton.Content = document.Encoding.Label;
             EditorLineEndingButton.Content = document.LineEndingLabel;
@@ -83,6 +90,11 @@ public sealed partial class MainWindow
     {
         if (args.Key is not (VirtualKey.Left or VirtualKey.Right)) return;
         args.Handled = true; editorRatio = Math.Clamp(editorRatio + (args.Key == VirtualKey.Right ? 0.03 : -0.03), 0.05, 0.95); ApplyEditorRatio(); SaveWorkspacePaneLayout();
+    }
+    private async void OnOpenBrowser(object sender, RoutedEventArgs args)
+    {
+        try { await FileEditor.OpenBrowserAsync(); }
+        catch (Exception ex) { ShowError("ブラウザ: " + ex.Message); }
     }
     private async void OnEditorEncodingClick(object sender, RoutedEventArgs args) => await FileEditor.ChangeEncodingAsync();
     private async void OnEditorLineEndingClick(object sender, RoutedEventArgs args) => await FileEditor.ChangeLineEndingAsync();

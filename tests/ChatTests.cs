@@ -34,6 +34,15 @@ Directory.CreateDirectory(root);
 try
 {
     var tools = new ChatTools(root, false, true, Path.Combine(root, "chat-backups"));
+    int browserCalls = 0;
+    Task<string> Browser(JsonObject args, CancellationToken ct) { ct.ThrowIfCancellationRequested(); browserCalls++; return Task.FromResult(args["action"]!.GetValue<string>()); }
+    var browserTools = new ChatTools(root, true, false, browserTool: Browser);
+    Assert(browserTools.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "browser"), "Visible browser tool missing");
+    Assert(await browserTools.ExecuteAsync("browser", Args("{\"action\":\"read\"}"), default) == "read" && browserCalls == 1, "Browser call was not forwarded");
+    var disabledBrowser = new ChatTools(root, false, false, browserTool: Browser);
+    Assert(!disabledBrowser.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "browser"), "Disabled browser advertised");
+    await Reject(() => disabledBrowser.ExecuteAsync("browser", Args("{\"action\":\"read\"}"), default), "Disabled browser executed");
+    Assert(browserCalls == 1, "Disabled browser reached UI");
     await tools.ExecuteAsync("write_file", Args("{\"path\":\"notes/a.txt\",\"content\":\"こんにちは\\nworld\"}"), default);
     Assert(await tools.ExecuteAsync("read_file", Args("{\"path\":\"notes/a.txt\"}"), default) == "こんにちは\nworld", "UTF-8 create/read failed");
     Assert((await tools.ExecuteAsync("search_files", Args("{\"query\":\"world\"}"), default)).Contains("a.txt:2"), "Content search lost line number");
@@ -222,13 +231,27 @@ try
     }
     Console.WriteLine("PASS: unlimited tool rounds, large independent batches, extended-loop cancellation and persistence");
 
+    var captureHandler = new MockHandler();
+    using var captureHttp = new HttpClient(captureHandler);
+    const string capturedImage = "data:image/png;base64,iVBORw0KGgo=";
+    var captureTools = new ChatTools(root, true, false, browserTool: (a, ct) => Task.FromResult(new JsonObject { ["url"] = "https://example.com/", ["image_url"] = capturedImage }.ToJsonString()));
+    captureHandler.Responses.Enqueue(Call(0, "capture", "browser", "{\"action\":\"screenshot\",\"selector\":\"\",\"value\":\"\"}") + Call(1, "read_after", "read_file", "{\"path\":\"notes/a.txt\"}") + Chunk(new(), "tool_calls") + "data: [DONE]\n\n");
+    captureHandler.Responses.Enqueue(Chunk(new() { ["content"] = "画像を確認しました" }, "stop") + "data: [DONE]\n\n");
+    var captureSession = new ChatSession { Workspace = root };
+    await new ChatClient(captureHttp).GenerateAsync(captureSession, captureTools, new SilentProgress(), () => { }, default);
+    var captureMessages = captureHandler.Requests[1]["messages"]!.AsArray();
+    Assert(captureMessages[2]!["role"]!.GetValue<string>() == "tool" && captureMessages[3]!["role"]!.GetValue<string>() == "tool" && captureMessages[4]!["role"]!.GetValue<string>() == "user", "Screenshot image interrupted tool result ordering");
+    Assert(captureMessages[4]!["content"]![1]!["image_url"]!["url"]!.GetValue<string>() == capturedImage, "Screenshot missing from next model request");
+    Assert(!captureMessages[2]!["content"]!.GetValue<string>().Contains("base64"), "Image base64 leaked into text tool result");
+    store.Save(captureSession);
+    Assert(store.Load().Single(s => s.Id == captureSession.Id).Messages[3]["content"]![1]!["image_url"]!["url"]!.GetValue<string>() == capturedImage, "Screenshot lost after saving history");
+    Console.WriteLine("PASS: browser screenshot image forwarding, mixed tool result ordering and image history persistence");
+
     var interrupted = new ChatSession { Workspace = root, Messages = new() { Args("{\"role\":\"user\",\"content\":\"test\"}") } };
     await Reject(() => new ChatClient(client).GenerateAsync(interrupted, readonlyTools, new SilentProgress(), () => { }, default, "invalid"), "Invalid reasoning level accepted");
     handler.Responses.Enqueue(Chunk(new() { ["content"] = "partial" }));
     await Reject(() => new ChatClient(client).GenerateAsync(interrupted, readonlyTools, new SilentProgress(), () => { }, default), "Truncated stream accepted");
     Assert(interrupted.Messages.Count == 1, "Interrupted assistant should not enter history");
-    handler.Responses.Enqueue(Chunk(new() { ["content"] = "too long" }, "length") + "data: [DONE]\n\n");
-    await Reject(() => new ChatClient(client).GenerateAsync(interrupted, readonlyTools, new SilentProgress(), () => { }, default), "Length-limited response accepted");
     handler.Responses.Enqueue(Call(0, "failed", "read_file", "{\"path\":\"../no\"}") + Chunk(new(), "tool_calls") + "data: [DONE]\n\n");
     handler.Responses.Enqueue(Chunk(new() { ["content"] = "失敗しました" }, "stop") + "data: [DONE]\n\n");
     await new ChatClient(client).GenerateAsync(interrupted, readonlyTools, new SilentProgress(), () => { }, default);

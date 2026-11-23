@@ -10,7 +10,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Nullable>enable</Nullable>
-    <DefaultItemExcludes>$(DefaultItemExcludes);runtime/**;models/**;openwebui/**;publish/**;tests/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);runtime/**;models/**;openwebui/**;publish/**;tests/**;NativeInference/**;Packaging/**</DefaultItemExcludes>
     <ImplicitUsings>enable</ImplicitUsings>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- An unavailable audit feed must not warn on every offline GUI launch.
@@ -24,6 +24,7 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7705" />
     <Compile Remove="tests/**/*.cs" />
     <Content Include="Start-LlamaServer.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Start-RocmServer.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Cli/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Terminal/**/*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
@@ -44,9 +45,21 @@
     <BrowserSearchRuntime Include="BrowserSearch/search.mjs;BrowserSearch/package*.json;BrowserSearch/node_modules/**/*" />
   </ItemGroup>
   <Target Name="CopyBrowserSearchRuntime" AfterTargets="Build">
-    <Copy SourceFiles="@(BrowserSearchRuntime)" DestinationFiles="@(BrowserSearchRuntime->'$(OutDir)BrowserSearch/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(BrowserSearchRuntime)" DestinationFiles="@(BrowserSearchRuntime->'$(OutDir)%(Identity)')" SkipUnchangedFiles="true" />
   </Target>
   <Target Name="PublishBrowserSearchRuntime" AfterTargets="Publish">
-    <Copy SourceFiles="@(BrowserSearchRuntime)" DestinationFiles="@(BrowserSearchRuntime->'$(PublishDir)BrowserSearch/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(BrowserSearchRuntime)" DestinationFiles="@(BrowserSearchRuntime->'$(PublishDir)%(Identity)')" SkipUnchangedFiles="true" />
+  </Target>
+  <!-- WinUI adds these resources to build output, but does not include them
+       in an unpackaged .NET publish. Keep the application PRI and XAML together. -->
+  <Target Name="IncludeWinUiPublishResources" AfterTargets="ComputeFilesToPublish">
+    <Error Condition="!Exists('$(TargetDir)$(AssemblyName).pri')" Text="The application WinUI resource index is missing from the build output." />
+    <ItemGroup>
+      <WinUiPublishResource Include="$(TargetDir)$(AssemblyName).pri;$(TargetDir)**/*.xbf" />
+      <ResolvedFileToPublish Include="@(WinUiPublishResource)">
+        <RelativePath>%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
   </Target>
 </Project>

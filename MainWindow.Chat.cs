@@ -27,6 +27,8 @@ public sealed partial class MainWindow
     private CancellationTokenSource? chatCommandCancellation;
     private bool selectingSession;
     private bool followChat = true;
+    private bool updatingChatScroll;
+    private double lastChatOffset;
     private ContentControl? streamingText;
     private ChatProgress? streamingProgress;
     private const string ChatSpinnerFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -35,6 +37,9 @@ public sealed partial class MainWindow
 
     private void InitializeChat()
     {
+        ChatScroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, args) => {
+            if (args.GetCurrentPoint(ChatScroll).Properties.MouseWheelDelta > 0) followChat = false;
+        }), true);
         SessionList.ContextRequested += OnWorkspaceTreeContext;
         SessionList.Expanding += (_, args) => { if (!selectingSession && args.Node.Content is ChatWorkspace w) { w.Expanded = true; try { settings.Save(); } catch (Exception ex) { ShowError(ex.Message); } } };
         SessionList.Collapsed += (_, args) => { if (!selectingSession && args.Node.Content is ChatWorkspace w) { w.Expanded = false; try { settings.Save(); } catch (Exception ex) { ShowError(ex.Message); } } };
@@ -242,6 +247,20 @@ public sealed partial class MainWindow
     private void RenderConversation()
     {
         if (closing) return;
+        var previousOffset = ChatScroll.VerticalOffset;
+        updatingChatScroll = true;
+        try { RenderConversationContent(); }
+        finally {
+            // Rebuilding tool results must not reset the reader's position or resume following.
+            ChatScroll.UpdateLayout();
+            if (!followChat) ChatScroll.ChangeView(null, Math.Min(previousOffset, ChatScroll.ScrollableHeight), null, true);
+            lastChatOffset = ChatScroll.VerticalOffset;
+            updatingChatScroll = false;
+        }
+    }
+
+    private void RenderConversationContent()
+    {
         if (currentChat == null) {
             ChatMessages.Children.Clear();
             ChatMessages.Children.Add(new TextBlock { Text = "ワークスペースを右クリックして「セッションを追加」、または「新しいチャット」からワークスペースを作成してください。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 32, 0, 12) });
@@ -274,8 +293,10 @@ public sealed partial class MainWindow
             {
                 var result = message["content"]?.GetValue<string>() ?? "";
                 if (message["name"]?.GetValue<string>() == "execute_command") result = ChatCommandExecution.FormatForDisplay(result);
+                if (message["name"]?.GetValue<string>() == "web_search") result = ChatBrowserSearch.FormatForDisplay(result);
                 var detail = MessageText(result);
-                ChatMessages.Children.Add(new Expander { Header = "ツール: " + message["name"]?.GetValue<string>(), Content = detail, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
+                var toolLabel = message["name"]?.GetValue<string>() == "web_search" ? "ウェブ検索（web_search）" : message["name"]?.GetValue<string>();
+                ChatMessages.Children.Add(new Expander { Header = "ツール: " + toolLabel, Content = detail, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
                 continue;
             }
             var text = "";
@@ -357,12 +378,25 @@ public sealed partial class MainWindow
 
     private void OnChatViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
     {
-        if (!e.IsIntermediate) followChat = ChatScroll.ScrollableHeight - ChatScroll.VerticalOffset < 80;
+        var offset = ChatScroll.VerticalOffset;
+        if (!updatingChatScroll) {
+            // React during the gesture, before another streamed update can pull it back down.
+            if (offset < lastChatOffset - 0.5) followChat = false;
+            else if (offset > lastChatOffset + 0.5 && ChatScroll.ScrollableHeight - offset <= 2) followChat = true;
+        }
+        lastChatOffset = offset;
     }
     private void ScrollChatToEnd()
     {
         if (!followChat) return;
-        DispatcherQueue.TryEnqueue(() => { if (!closing && followChat) { ChatScroll.UpdateLayout(); ChatScroll.ChangeView(null, ChatScroll.ScrollableHeight, null, true); } });
+        DispatcherQueue.TryEnqueue(() => {
+            if (closing || !followChat) return;
+            ChatScroll.UpdateLayout();
+            if (!followChat) return;
+            updatingChatScroll = true;
+            try { ChatScroll.ChangeView(null, ChatScroll.ScrollableHeight, null, true); lastChatOffset = ChatScroll.VerticalOffset; }
+            finally { updatingChatScroll = false; }
+        });
     }
 
     private RichTextBlock MessageText(string text)
@@ -457,7 +491,7 @@ public sealed partial class MainWindow
         if (chatCancellation != null) return;
         try
         {
-            var web = new ToggleSwitch { Header = "ウェブ検索", IsOn = settings.ChatWebEnabled, OnContent = "有効", OffContent = "無効" };
+            var web = new ToggleSwitch { Header = "ウェブ検索・ブラウザ操作", IsOn = settings.ChatWebEnabled, OnContent = "有効", OffContent = "無効" };
             var writes = new ToggleSwitch { Header = "ファイル変更", IsOn = settings.ChatWritesEnabled, OnContent = "有効", OffContent = "無効" };
             var commands = new ToggleSwitch { Header = "コマンド実行", IsOn = settings.ChatCommandsEnabled, OnContent = "有効", OffContent = "無効" };
             var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
@@ -571,7 +605,7 @@ public sealed partial class MainWindow
         if (!serverStatus.IsConnected) return;
         if (!pendingMessages.TryGetValue(session.Id, out var pending)) pendingMessages[session.Id] = pending = new();
         bool hasInput = text.Length > 0 || attachments.Count > 0;
-        bool retry = !hasInput && session.Messages.LastOrDefault()?["role"]?.GetValue<string>() is "user" or "tool";
+        bool retry = !hasInput && (session.Messages.LastOrDefault()?["role"]?.GetValue<string>() is "user" or "tool" || session.Messages.LastOrDefault()?["incomplete"]?.GetValue<bool>() == true);
         if (hasInput)
         {
             JsonNode content = JsonValue.Create(text)!;
@@ -638,6 +672,7 @@ public sealed partial class MainWindow
             // Save the replacement before changing the visible session.
             chatStore.Save(replacement);
             session.Messages = replacement.Messages; session.Summary = replacement.Summary;
+            session.CompactedMessageCount = replacement.CompactedMessageCount;
             session.Title = replacement.Title; session.ContextTokens = replacement.ContextTokens; session.UpdatedAt = replacement.UpdatedAt;
             if (command == "clear")
             {
@@ -680,7 +715,6 @@ public sealed partial class MainWindow
         activeChatTurn = completion;
         try
         {
-            session.ContextTokens = null;
             if (message != null)
             {
                 var text = message["content"] is JsonValue value ? value.GetValue<string>() : "";
@@ -705,16 +739,19 @@ public sealed partial class MainWindow
                 SetChatActivity(update.Activity == "完了" ? "" : update.Activity);
                 ScrollChatToEnd();
             });
-            var tools = new ChatTools(session.Workspace, settings.ChatWebEnabled, settings.ChatWritesEnabled, allowCommands: settings.ChatCommandsEnabled);
+            var tools = new ChatTools(session.Workspace, settings.ChatWebEnabled, settings.ChatWritesEnabled, allowCommands: settings.ChatCommandsEnabled, browserTool: FileEditor.ExecuteBrowserAsync);
             var reasoningEffort = settings.ChatReasoningEffort;
             // Generation owns a separate transcript; the UI receives stable snapshots.
             generationSession = new ChatSession { Id = session.Id, Title = session.Title, Workspace = session.Workspace, WorkspaceId = session.WorkspaceId,
-                Summary = session.Summary, Messages = session.Messages.Select(m => (JsonObject)m.DeepClone()).ToList() };
+                Summary = session.Summary, CompactedMessageCount = session.CompactedMessageCount, ContextTokens = session.ContextTokens,
+                Messages = session.Messages.Select(m => (JsonObject)m.DeepClone()).ToList() };
             await Task.Run(() => new ChatClient(chatHttp).GenerateAsync(generationSession, tools, progress, () => {
                 chatStore.Save(generationSession);
                 var snapshot = generationSession.Messages.Select(m => (JsonObject)m.DeepClone()).ToList();
                 var contextTokens = generationSession.ContextTokens;
-                DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.ContextTokens = contextTokens; session.UpdatedAt = generationSession.UpdatedAt; streamingProgress = null; RenderConversation(); } });
+                var summary = generationSession.Summary;
+                var compactedCount = generationSession.CompactedMessageCount;
+                DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.Summary = summary; session.CompactedMessageCount = compactedCount; session.ContextTokens = contextTokens; session.UpdatedAt = generationSession.UpdatedAt; streamingProgress = null; RenderConversation(); } });
             }, cancellation.Token, reasoningEffort));
             cancellation.Token.ThrowIfCancellationRequested();
             SetChatActivity("");
@@ -724,7 +761,7 @@ public sealed partial class MainWindow
         catch (Exception ex) { if (!closing) { ShowError(ex.Message); SetChatActivity("応答を取得できませんでした。空欄のまま送信すると再試行します。"); } }
         finally
         {
-            if (generationSession != null) { session.Messages = generationSession.Messages; session.ContextTokens = generationSession.ContextTokens; session.UpdatedAt = generationSession.UpdatedAt; }
+            if (generationSession != null) { session.Messages = generationSession.Messages; session.Summary = generationSession.Summary; session.CompactedMessageCount = generationSession.CompactedMessageCount; session.ContextTokens = generationSession.ContextTokens; session.UpdatedAt = generationSession.UpdatedAt; }
             chatCancellation = null;
             streamingProgress = null;
             if (!closing) UpdateChatSpinner();

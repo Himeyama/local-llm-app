@@ -9,6 +9,7 @@ namespace LocalLlm.Gui.Controls;
 public sealed partial class WorkspaceExplorerView : Grid
 {
     public event Action<string>? FileOpenRequested;
+    public event Action<string>? FileEditRequested;
     public event Action<string, string>? PathRenamed;
     public event Action? ExpansionChanged;
     public bool IsExpanded { get; private set; } = true;

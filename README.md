@@ -1,6 +1,6 @@
 # Local LLM GUI
 
-WinUI 3 / C# / .NET 8 のローカル LLM を扱う Windows アプリです。このリポジトリ内のスクリプト、モデル、llama.cpp を使い、アプリ内のチャットから直接接続します。
+WinUI 3 / C# / .NET 8 のローカル LLM を扱う Windows アプリです。既定の推論基盤は Rust / ROCm の `local-rocm.exe` です。対応する GGUF モデルを指定し、アプリ内のチャットから直接接続します。
 
 <img width="600" src="https://github.com/user-attachments/assets/872b5c0f-1a7b-49b1-9fd7-63f2db3fbfbf" />
 
@@ -27,8 +27,8 @@ Pop-Location
 新しく clone した場合は、以下の配置で準備してください。大容量のモデル・実行環境・会話データは Git に含みません。
 
 - `models/Qwen3.8-27B-Uncensored/Qwen3.8-27B-Uncensored-Q4_K_M.gguf`
-- `models/Qwen3.8-27B-Uncensored/mmproj-Qwen3.8-27B-Uncensored-F16.gguf`
-- `runtime/llama.cpp/llama-server.exe` と同じ ROCm 配布物の DLL、`rocblas/`、`hipblaslt/`。配布物全体を配置します。
+- `runtime/native/local-rocm.exe` と `runtime/rocm/` の ROCm / HIPRTC / rocBLAS。ビルド・配置方法は [NativeInference/README.md](NativeInference/README.md) を参照してください。
+- llama.cpp を明示的に選ぶ場合だけ、`runtime/llama.cpp/llama-server.exe` と対応するランタイムを別途配置します。画像を使う場合はモデルに対応する mmproj も必要です。
 
 Claude Code / Codex CLI と Node.js は各 CLI の実行に必要です。起動スクリプトとプロキシは `Cli/` に同梱しています。通信キャプチャーを使う場合だけ Python と mitmweb が必要です。
 
@@ -117,3 +117,43 @@ dotnet publish .\LocalLlm.Gui.csproj -c Release -r win-x64 --self-contained true
 エディタを閉じているときは上にチャット・下にコンソール、開いているときは左上にエディタ・左下にコンソール・右にチャットを配置します。コンソールの開閉状態、コンソールの高さ、エディタとチャットの幅の境界は全セッションで共有し、再起動後も復元します。コンソールのプロセスと内容はセッションごとに保持します。
 
 ワークスペースを右クリックして「削除」を選ぶと確認ダイアログを表示します。承認すると登録と所属セッションの履歴を削除し、作業ディレクトリ内のファイルは保持します。「デフォルト」も削除でき、再起動後も削除状態を維持します。
+
+### チャットのブラウザ
+
+入力欄の地球アイコンから、ファイルエディターと同じタブ列にブラウザを開けます。URL を入力して Enter で移動し、戻る・進む・更新を使えます。HTTP/HTTPS と localhost に対応します。
+
+ツール設定の「ウェブ検索・ブラウザ操作」を有効にすると、AI は `browser` ツールで同じタブの移動、本文とリンクの読み取り、CSS セレクターによるクリック・文字入力を行えます。ブラウザのプロファイルは `%LOCALAPPDATA%/LocalLlmGui/BrowserWebView2/` に分離します。ダウンロードとサイトの権限要求は無効です。タブは再起動時に復元しません。
+
+AI の `browser` ツールは `screenshot` 操作で現在の表示領域を PNG として撮影し、次のモデル入力へ画像として渡せます。画像はチャット履歴にも保存・表示します。画像対応モデルが必要です。ページ全体ではなく、現在ブラウザに見えている範囲を撮影します。
+
+### 会話の自動圧縮と回答の継続
+
+コンテキスト容量の約70%を目安に、送信前とツール実行後に古い会話を自動要約します。使用量が取得できない場合や新しい入力にはテキスト量・画像数からの保守的な見積もりを使います。画面と保存済み履歴には元のメッセージを残し、AI には要約と直近のメッセージを送ります。長い記録は小分けに要約し、ツール呼び出しと結果を分離しません。処理中は「会話を自動圧縮しています…」と表示します。
+
+1回の生成上限に達した場合は途中の回答を保存して自動で続きを生成し、1つの回答につなぎます。再試行では推論を省き、空き容量の範囲で生成枠を増やします。未完成のツール呼び出しは実行せずに再生成します。停止後も途中の回答は残り、入力欄を空にして送信すると続きを再開できます。出力が進まない再試行は3回で停止します。最新の入力そのものがモデルの容量を超える場合は、入力や画像を小さくする必要があります。
+
+自動圧縮の判断と生成枠の計算ではサーバーの実測トークン数を優先し、未計測の追加分には日本語・英数字を考慮した概算を使います。要約の生成枠は通常4,096、打ち切り時の再試行では8,192トークン（空き容量の範囲内）です。それでも完了しなければ対象の記録を分割し、順に要約を統合します。分割後も失敗する場合や停止した場合は、元の会話と圧縮状態を保持します。
+
+検証: `dotnet run --project tests/ChatContextTests.csproj`（モックサーバーによる自動圧縮・長文継続・失敗時の履歴保持）。
+
+### Rust / ROCm 推論エンジン
+
+`NativeInference/` に llama.cpp・ggml・PyTorch を実行時に使わない、Rust / HIP の独自推論サーバーを追加しています。現在の Qwen GGUF のテキスト生成、日本語、SSE、function tools を R9700 上で検証しています。構成、ビルド、起動方法と対応範囲は [NativeInference/README.md](NativeInference/README.md) に記載しています。
+
+ローカルの ROCm ランタイムを配置後、`Start-RocmServer.ps1` で起動できます。GUI の実行ファイル欄に `runtime/native/local-rocm.exe` の絶対パスを指定しても起動できます。
+
+ROCm クレート `rocmrc` 経由の HIP / HIPRTC / rocBLAS、履歴キャッシュ、最大256トークンのバッチ入力、GPU 一時メモリの再利用に対応しています。量子化重みの入力行列積は FP16 入力・FP32 累積を使い、長い会話では作業領域に合わせてバッチを縮小します。R9700・27B の固定比較では1,356入力トークン＋50回の生成評価が22.62秒から6.43秒になりました（モデルロードを除外）。同じ条件の llama.cpp は約3.13秒で、性能差は引き続きあります。比較条件・測定値・数値精度の扱いは [NativeInference/README.md](NativeInference/README.md) に記載しています。
+
+GUI と `Start-LlamaServer.ps1` の初期設定は Rust 基盤です。画像・mmproj、Claude / Codex の専用 API、MTP は未対応です。これらを使う場合は、対応する別の推論サーバーを明示的に指定してください。保存済みのサーバーパスなど、既存の明示設定は保持します。
+
+### インストーラー
+
+[hsis v0.11.2](https://github.com/Himeyama/hsis/tree/v0.11.2) で Windows 11 x64 向けセットアップを作成します。
+GUI は .NET と Windows App SDK を同梱し、Rust サーバー、ROCm / rocBLAS、Node.js と検索モジュールも同梱します。
+GGUF モデルは含めません。インストール後、サーバー設定で対応モデルの絶対パスを指定してください。
+
+```powershell
+.\Build-Installer.ps1
+```
+
+成果物と SHA-256 は `publish/installer/` に出力します。構成、ビルド環境、展開検証は [Packaging/README.md](Packaging/README.md) に記載しています。

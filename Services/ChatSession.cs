@@ -14,6 +14,9 @@ public sealed class ChatSession
     public List<JsonObject> Messages { get; set; } = new();
     public int? ContextTokens { get; set; }
     public string Summary { get; set; } = "";
+    // Automatic compaction retains the visible transcript, but sends only the
+    // summary plus messages after this index to the model.
+    public int CompactedMessageCount { get; set; }
     public override string ToString() => Title;
 }
 

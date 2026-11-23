@@ -1,0 +1,13 @@
+{
+  "hsis": {
+    "version": "0.11.2",
+    "repository": "https://github.com/Himeyama/hsis.git",
+    "tag": "v0.11.2",
+    "commit": "cc5d03947606deee1a7c445e3fe24f8902b0d679"
+  },
+  "node": {
+    "version": "24.22.3",
+    "url": "https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip",
+    "sha256": "e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f"
+  }
+}

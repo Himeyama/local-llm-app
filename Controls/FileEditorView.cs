@@ -35,7 +35,7 @@ public sealed partial class FileEditorView : Grid
     }
     public EditorDocument? ActiveDocument => Active?.Document;
     private EditorTab? Active => (tabs.SelectedItem as TabViewItem)?.Tag as EditorTab;
-    private IEnumerable<EditorTab> Documents => tabs.TabItems.OfType<TabViewItem>().Select(item => (EditorTab)item.Tag);
+    private IEnumerable<EditorTab> Documents => tabs.TabItems.OfType<TabViewItem>().Select(item => item.Tag).OfType<EditorTab>();
 
     private sealed class EditorTab(EditorDocument document, TabViewItem item)
     {
@@ -54,8 +54,8 @@ public sealed partial class FileEditorView : Grid
         RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         Children.Add(notice);
         SetRow(tabs, 1); Children.Add(tabs);
-        tabs.SelectionChanged += (_, _) => { ActivateEditor(); Changed?.Invoke(); };
-        tabs.TabCloseRequested += async (_, args) => { if (args.Tab.Tag is EditorTab tab) await CloseTabAsync(tab); };
+        tabs.SelectionChanged += (_, _) => { ActivateEditor(); UpdateBrowserVisibility(); Changed?.Invoke(); };
+        tabs.TabCloseRequested += async (_, args) => { if (args.Tab.Tag is EditorTab tab) await CloseTabAsync(tab); else if (args.Tab == webTab) CloseBrowser(); };
         tabs.PreviewKeyDown += OnEditorKeyDown;
         autoSaveTimer.Tick += async (_, _) => await AutoSaveAsync();
         ActualThemeChanged += (_, _) => SendTheme();
@@ -266,6 +266,7 @@ public sealed partial class FileEditorView : Grid
     private void SendModel(EditorTab tab) => Post(new { type = "open", id = tab.Id, path = tab.Document.Path, text = tab.Document.Text, revision = tab.Revision });
     private void ActivateEditor(bool focus = false)
     {
+        UpdateBrowserVisibility();
         Post(new { type = "activate", id = Active?.Id, focus }); PostReadOnly();
     }
     private void PostReadOnly() => Post(new { type = "readOnly", value = !InteractionEnabled || Active?.Closing == true });
@@ -295,6 +296,6 @@ public sealed partial class FileEditorView : Grid
             catch (Exception ex) { Report(ex); }
         }
     }
-    public void Stop() { stopped = true; autoSaveTimer.Stop(); browser?.Close(); }
+    public void Stop() { stopped = true; autoSaveTimer.Stop(); browser?.Close(); CloseBrowser(); }
     private void Report(Exception ex) { notice.Message = ex.Message; notice.IsOpen = true; Failed?.Invoke(ex.Message); }
 }

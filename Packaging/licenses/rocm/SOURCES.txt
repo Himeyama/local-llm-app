@@ -1,0 +1,6 @@
+rocBLAS-LICENSE.txt: https://raw.githubusercontent.com/ROCm/rocBLAS/rocm-7.2.0/LICENSE.md
+hipBLASLt-LICENSE.txt: https://raw.githubusercontent.com/ROCm/hipBLASLt/rocm-7.2.0/LICENSE.md
+HIP-LICENSE.txt: https://raw.githubusercontent.com/ROCm/HIP/rocm-7.2.0/LICENSE.md
+CLR-LICENSE.txt: https://raw.githubusercontent.com/ROCm/clr/rocm-7.2.0/LICENSE.md
+LLVM-LICENSE.txt: https://raw.githubusercontent.com/ROCm/llvm-project/rocm-7.2.0/llvm/LICENSE.TXT
+ROCm-Device-Libs-LICENSE.txt: https://raw.githubusercontent.com/ROCm/llvm-project/rocm-7.2.0/amd/device-libs/LICENSE.TXT

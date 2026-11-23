@@ -1,0 +1,32 @@
+Local LLM
+
+起動
+スタートメニューの「Local LLM」から起動してください。
+.NET、Rust、Python、Node.js を別途インストールする必要はありません。
+Windows 11 x64、対応する AMD GPU と AMD の GPU ドライバーが必要です。
+ROCm の DLL が使用する Microsoft Visual C++ x64 ランタイムも必要です。
+未導入の場合は Microsoft 公式の最新 Visual C++ 再頒布可能パッケージを導入してください。
+エディタとウェブ検索には Microsoft Edge / WebView2 が必要です。
+
+モデルの指定
+GGUF モデルは同梱していません。初回はサーバー設定の「モデル」に、
+対応する Qwen35 系 GGUF の絶対パスを指定し、設定を保存してください。
+既定の推論サーバーは同梱の runtime\native\local-rocm.exe です。
+同梱 ROCm ランタイムは gfx1200 / gfx1201 用です。R9700 で検証しています。
+
+標準の推論基盤
+Rust / ROCm の独自実装です。テキスト、日本語、ストリーミング、
+チャットの関数ツールに対応しています。画像、mmproj、MTP、
+Claude Messages / Codex Responses API は未対応です。
+Claude / Codex の専用 API や画像が必要な場合は、対応する別の推論サーバーを
+用意してサーバー設定の実行ファイルを変更してください。
+
+保存データ
+会話・設定は %LOCALAPPDATA%\LocalLlmGui に保存されます。
+作業フォルダーの既定はドキュメントです。
+モデルはインストール先の外で管理することを推奨します。
+アンインストールは配布ファイルとショートカットを削除します。
+会話・設定・後から追加したモデルなどのファイルは削除しません。
+
+ライセンス
+licenses フォルダーの同梱コンポーネントのライセンスを参照してください。

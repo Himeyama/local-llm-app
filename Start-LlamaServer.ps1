@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-Starts a local multimodal llama-server API using the ROCm/HIP backend.
+Starts the local Rust/ROCm API, or an explicitly selected llama.cpp server.
 
 The llama.cpp Web UI is disabled; the GUI and OpenAI-compatible CLI clients
 connect to the API directly.
@@ -47,6 +47,9 @@ param(
 
     [string]$ServerExe,
 
+    # Used only when ServerExe points to the independent Rust backend.
+    [string]$RocmBin = $env:LOCAL_ROCM_BIN,
+
     [switch]$LanAccess,
 
     [switch]$Help,
@@ -72,7 +75,7 @@ if ($Help) {
 }
 
 if ([string]::IsNullOrWhiteSpace($ServerExe)) {
-    $ServerExe = 'runtime\llama.cpp\llama-server.exe'
+    $ServerExe = 'runtime\native\local-rocm.exe'
 }
 if (-not [System.IO.Path]::IsPathRooted($ServerExe)) {
     $ServerExe = Join-Path $PSScriptRoot $ServerExe
@@ -92,6 +95,18 @@ if (-not (Test-Path -LiteralPath $ServerExe -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $modelPath)) {
     Write-Error "GGUF モデルが見つかりません: $modelPath"
     exit 1
+}
+if ([IO.Path]::GetFileName($ServerExe) -ieq 'local-rocm.exe') {
+    if ([string]::IsNullOrWhiteSpace($RocmBin)) { $RocmBin = Join-Path $PSScriptRoot 'runtime\rocm\bin' }
+    if (-not [IO.Path]::IsPathRooted($RocmBin)) { $RocmBin = Join-Path $PSScriptRoot $RocmBin }
+    if (-not (Test-Path -LiteralPath (Join-Path $RocmBin 'amdhip64_7.dll') -PathType Leaf)) {
+        Write-Error "ROCm 7 SDK not found: $RocmBin. Set -RocmBin or LOCAL_ROCM_BIN."
+        exit 1
+    }
+    $nativeHost = if ($LanAccess) { '0.0.0.0' } else { '127.0.0.1' }
+    Write-Host "Native ROCm server: text only / context $ContextSize / host $nativeHost / MTP disabled"
+    & $ServerExe serve $modelPath $RocmBin ([string]$ContextSize) $nativeHost '9931'
+    exit $LASTEXITCODE
 }
 if (-not (Test-Path -LiteralPath $mmprojPath -PathType Leaf)) {
     Write-Error "画像入力用 mmproj が見つかりません: $mmprojPath"

@@ -1,0 +1,27 @@
+[package]
+name = "local-rocm"
+version = "0.1.0"
+edition = "2024"
+description = "Independent Rust GGUF inference runtime for AMD ROCm"
+
+[dependencies]
+half = "=2.7.1"
+regex = "=1.13.1"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+
+[target.'cfg(windows)'.dependencies]
+rocmrc = { version = "=0.5.1", features = ["dynamic-loading", "rocm-07021", "rocblas"] }
+libloading = "=0.8.6"
+
+[patch.crates-io]
+# Upstream bindings and safe API, with a small Windows DLL-path adaptation.
+rocmrc = { path = "vendor/rocmrc" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+

@@ -3,6 +3,9 @@ using System.Text.Json.Nodes;
 using LocalLlm.Gui.Services;
 
 static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
+Assert(JsonSerializer.Deserialize<Settings>("{}")!.AppScale == 1.0, "Legacy settings must default to 100% scale");
+Assert(JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(new Settings { AppScale = 1.25 }))!.AppScale == 1.25, "Display scale must survive restart");
+Assert(new Settings { AppScale = 0 }.AppScale == 0.75 && new Settings { AppScale = 9 }.AppScale == 1.5 && new Settings { AppScale = double.NaN }.AppScale == 1.0, "Invalid display scales must remain safe");
 var workspaces = new List<ChatWorkspace>();
 var first = new ChatSession { Workspace = @"C:\work\demo", Title = "既存の会話", UpdatedAt = new DateTime(2020, 1, 1), Messages = new() { new JsonObject { ["role"] = "user", ["content"] = "保持する履歴" } } };
 var second = new ChatSession { Workspace = @"c:\work\DEMO\" };
