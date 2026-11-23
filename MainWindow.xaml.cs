@@ -34,6 +34,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        string iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
+        if (File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
         Title = "Local LLM — ローカル AI ワークスペース";
         InitializeWindowChrome();
         ResizeInitialWindow();
