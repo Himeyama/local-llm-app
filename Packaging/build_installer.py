@@ -94,7 +94,7 @@ def prepare_node(destination):
 
 
 def rust_licenses(cargo, destination):
-    metadata = json.loads(subprocess.check_output([str(cargo), "metadata", "--locked", "--offline", "--format-version", "1",
+    metadata = json.loads(subprocess.check_output([str(cargo), "metadata", "--locked", "--format-version", "1",
                                                   "--manifest-path", str(ROOT / "NativeInference/Cargo.toml")]))
     inventory = []
     for package in metadata["packages"]:
