@@ -36,10 +36,10 @@ hsis と Node.js の初回取得、NuGet の復元にはネットワーク接続
 ```powershell
 .\Build-Installer.ps1
 # アプリのバージョンを指定する場合
-.\Build-Installer.ps1 -Version 1.0.0
+.\Build-Installer.ps1 -Version 0.1.0
 ```
 
-既定のアプリバージョンは既存の .NET SDK の既定と同じ `1.0.0` です。hsis 自体の `0.11.2` とは別です。
+アプリバージョンは `LocalLlm.Gui.csproj` の `Version` を使用します。明示する場合も同じ番号が必要です。hsis 自体の `0.11.2` とは別です。
 hsis のタグとコミット、配布テンプレート内のバージョンを検証してから使用します。
 Rust は `cargo build --locked --release` でビルドし、GUI は self-contained で publish します。
 `-SkipBuild` は Rust と hsis の作成済みバイナリを再利用する指定です。GUI の publish は行います。
@@ -76,4 +76,4 @@ python -X utf8 Packaging/verify_installer.py <Setup.exe> --manifest <作業フ�
 配布元の全ファイルとサイズ・SHA-256 を比較し、モデル除外、アプリ一覧登録の定義、ユーザーデータを保持する削除定義を確認します。
 検証用ファイルは `publish/installer/verification-*` に置き、システムのレジストリやショートカットは変更しません。
 
-生成されたセットアップと検証結果はローカル成果物です。公開や署名、Git 操作は自動実行しません。
+`v<バージョン>` タグの push で GitHub Actions が Windows x64 のセットアップを作成・検証し、チェックサムと説明書を GitHub Releases に公開します。タグとプロジェクトのバージョンが異なる場合は失敗します。GPU を持たない GitHub のランナーでは GPU の実行テストは行いません。成果物は署名されません。

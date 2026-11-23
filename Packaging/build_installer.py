@@ -11,6 +11,7 @@ import subprocess
 import urllib.request
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING = ROOT / "Packaging"
@@ -201,13 +202,16 @@ def create_uninstall_include(app):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", default="1.0.0")
+    parser.add_argument("--version", default=ET.parse(ROOT / "LocalLlm.Gui.csproj").findtext("./PropertyGroup/Version"))
     parser.add_argument("--rocm-root", type=Path, default=ROOT / "runtime/rocm")
     parser.add_argument("--hsis-source", type=Path, default=TOOLS / "hsis-v0.11.2")
     parser.add_argument("--skip-build", action="store_true", help="Reuse Rust/hsis binaries; GUI is still published")
     parser.add_argument("--stage-only", action="store_true")
     parser.add_argument("--payload", type=Path, help="Package an existing staged payload")
     args = parser.parse_args()
+    project_version = ET.parse(ROOT / "LocalLlm.Gui.csproj").findtext("./PropertyGroup/Version")
+    if args.version != project_version:
+        raise ValueError("Installer version must match LocalLlm.Gui.csproj")
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version) or any(int(part) > 65535 for part in args.version.split(".")):
         raise ValueError("Version must be MAJOR.MINOR.PATCH, each component <= 65535")
     app = args.payload.resolve(strict=True) if args.payload else stage_payload(args.version, args.rocm_root, args.skip_build)

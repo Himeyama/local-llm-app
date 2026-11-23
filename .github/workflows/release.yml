@@ -1,0 +1,58 @@
+name: Release installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Update Rust
+        run: rustup update stable --no-self-update
+      - name: Validate tag and version
+        shell: pwsh
+        run: |
+          $version = ([xml](Get-Content LocalLlm.Gui.csproj -Raw)).Project.PropertyGroup.Version | Select-Object -First 1
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid project version' }
+          if ($env:GITHUB_REF -ne "refs/tags/v$version") { throw "Run on tag v$version" }
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+      - name: Install browser dependencies
+        run: npm ci --no-audit --no-fund --prefix BrowserSearch
+      - name: Prepare ROCm
+        run: python Packaging/prepare_ci_rocm.py
+      - name: Build installer
+        run: ./Build-Installer.ps1
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $info = Get-Content publish/installer/latest-build.json -Raw | ConvertFrom-Json
+          python Packaging/check_payload.py $info.payload
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python Packaging/verify_installer.py $info.installer --manifest (Join-Path (Split-Path $info.payload) 'payload-manifest.json')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $info = Get-Content publish/installer/latest-build.json -Raw | ConvertFrom-Json
+          gh release create "v$env:APP_VERSION" $info.installer "$($info.installer).sha256" $info.readme --verify-tag --generate-notes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
