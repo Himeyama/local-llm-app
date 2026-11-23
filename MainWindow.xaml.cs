@@ -277,6 +277,7 @@ public sealed partial class MainWindow : Window
         PageTitle.Text = page switch { "chat" => currentChat?.Title ?? "チャット", "investigation" => "脆弱性診断 · プロトタイプ", "server" => "llama-server", "cli" => "Claude / Codex", _ => "ログ" };
         PageTitle.Visibility = page == "chat" ? Visibility.Collapsed : Visibility.Visible;
         PageLayout.RowSpacing = page == "chat" ? 0 : 16;
+        PageLayout.Padding = page == "chat" ? new Thickness(24, 6, 8, 8) : new Thickness(24, 6, 24, 20);
         ChatWorkspaceLayout.Visibility = page == "chat" ? Visibility.Visible : Visibility.Collapsed;
         RefreshGitContext();
         InvestigationPanel.Visibility = page == "investigation" ? Visibility.Visible : Visibility.Collapsed;

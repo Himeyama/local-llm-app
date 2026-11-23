@@ -612,8 +612,8 @@ public sealed partial class MainWindow
         else { chatSpinnerTimer.Stop(); ChatActivitySpinner.Text = ""; ChatActivitySpinner.Visibility = Visibility.Collapsed; }
     }
     private void OnStopChat(object sender, RoutedEventArgs e) { chatCommandCancellation?.Cancel(); chatCancellation?.Cancel(); SetChatActivity("停止しています…"); }
-    private void OnChatInputGotFocus(object sender, RoutedEventArgs e) => ChatComposer.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
-    private void OnChatInputLostFocus(object sender, RoutedEventArgs e) => ChatComposer.BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextControlBorderBrush"];
+    private void OnChatInputGotFocus(object sender, RoutedEventArgs e) => ChatComposerOutline.Fill = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
+    private void OnChatInputLostFocus(object sender, RoutedEventArgs e) => ChatComposerOutline.Fill = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextControlBorderBrush"];
     private void OnChatKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key == Windows.System.VirtualKey.Enter && !Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
