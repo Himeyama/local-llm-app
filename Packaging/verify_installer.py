@@ -63,13 +63,22 @@ def main():
     assert any(item["Arguments"][2] == "DisplayName" and item["Arguments"][3] == "Local LLM" for item in registrations)
     assert any(item["Arguments"][2] == "UninstallString" and item["Arguments"][3] == '"$INSTDIR\\Uninstall.exe"' for item in registrations)
 
+    seven_zip = Path(os.environ.get("HSIS_7ZIP_PATH") or shutil.which("7z") or
+                     Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "7-Zip/7z.exe")
     tar = Path(os.environ["SystemRoot"]) / "System32/tar.exe"
-    names = subprocess.check_output([str(tar), "-tf", str(archive)], text=True, encoding="utf-8").splitlines()
+    if seven_zip.is_file():
+        listing = subprocess.check_output([str(seven_zip), "l", "-slt", "-ba", str(archive)], text=True, encoding="utf-8")
+        names = [line[7:].replace("\\", "/") for line in listing.splitlines() if line.startswith("Path = ")]
+    else:
+        names = subprocess.check_output([str(tar), "-tf", str(archive)], text=True, encoding="utf-8").splitlines()
     allowed = {"", "files"} | {item["Entry"] for item in files}
     assert all(name.removeprefix("./").rstrip("/") in allowed for name in names)
     raw = destination / "raw"
     raw.mkdir()
-    subprocess.run([str(tar), "-xf", str(archive), "-C", str(raw)], check=True)
+    if seven_zip.is_file():
+        subprocess.run([str(seven_zip), "x", "-y", f"-o{raw}", str(archive)], check=True, stdout=subprocess.DEVNULL)
+    else:
+        subprocess.run([str(tar), "-xf", str(archive), "-C", str(raw)], check=True)
     installed = destination / "installed"
     for item in files:
         target = (installed / item["Destination"].replace("\\", "/")).resolve()

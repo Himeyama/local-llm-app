@@ -36,7 +36,7 @@ hsis と Node.js の初回取得、NuGet の復元にはネットワーク接続
 ```powershell
 .\Build-Installer.ps1
 # アプリのバージョンを指定する場合
-.\Build-Installer.ps1 -Version 0.1.2
+.\Build-Installer.ps1 -Version 0.1.3
 ```
 
 アプリバージョンは `LocalLlm.Gui.csproj` の `Version` を使用します。明示する場合も同じ番号が必要です。hsis 自体の `0.11.2` とは別です。
@@ -72,7 +72,7 @@ python -X utf8 Packaging/verify_installer.py <Setup.exe> --manifest <作業フ�
 
 `check_payload.py` は外部の Node / ROCm を見つけない PATH で、同梱 Node と MCP モジュールを確認します。
 `--gpu` は小さな既知の配列で HIP / HIPRTC と rocBLAS を検証します。GGUF モデルやサーバーはロードしません。
-`verify_installer.py` は生成済み EXE の HSISPKG3 フッターと配置情報を検査し、Windows 標準 tar で展開します。
+`verify_installer.py` は生成済み EXE の HSISPKG3 フッターと配置情報を検査し、7-Zip または Windows 標準 tar で展開します。
 配布元の全ファイルとサイズ・SHA-256 を比較し、モデル除外、アプリ一覧登録の定義、ユーザーデータを保持する削除定義を確認します。
 検証用ファイルは `publish/installer/verification-*` に置き、システムのレジストリやショートカットは変更しません。
 
