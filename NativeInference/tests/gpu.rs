@@ -32,26 +32,30 @@ fn tiled_decode_attention_matches_cpu_for_partial_tiles_and_grouped_heads() -> R
         rope_base: 10000.0,
         eps: 1e-6,
     };
-    let key = |p: usize, h: usize| (p % 31) as f32 * 0.01 - 0.15 + h as f32 * 0.05;
+    let key = |p: usize, h: usize, d: usize| {
+        (p % 31) as f32 * 0.01 - 0.15 + h as f32 * 0.05 + (d % 13) as f32 * 0.007
+    };
     let value = |p: usize, h: usize, d: usize| {
         (p % 17) as f32 * 0.1 - 0.8 + h as f32 * 0.3 + d as f32 * 0.001
     };
-    for length in [257, 1400, 2057] {
+    for length in [1, 31, 255, 256, 257, 1400, 2057] {
         let mut keys = Vec::new();
         let mut values = Vec::new();
         for p in 0..length {
             for h in 0..2 {
                 for d in 0..256 {
-                    keys.extend(half::f16::from_f32(key(p, h)).to_le_bytes());
+                    keys.extend(half::f16::from_f32(key(p, h, d)).to_le_bytes());
                     values.extend(half::f16::from_f32(value(p, h, d)).to_le_bytes());
                 }
             }
         }
         let queries: Vec<f32> = (0..4)
-            .flat_map(|h| vec![0.1 * (h + 1) as f32; 256])
+            .flat_map(|h| (0..256).map(move |d| 0.1 * (h + 1) as f32 + (d % 11) as f32 * 0.01))
             .collect();
         let gates: Vec<f32> = (0..1024).map(|i| i as f32 * 0.001 - 0.5).collect();
-        let last_key: Vec<_> = (0..2).flat_map(|h| vec![key(length - 1, h); 256]).collect();
+        let last_key: Vec<_> = (0..2)
+            .flat_map(|h| (0..256).map(move |d| key(length - 1, h, d)))
+            .collect();
         let last_value: Vec<_> = (0..2)
             .flat_map(|h| (0..256).map(move |d| value(length - 1, h, d)))
             .collect();
@@ -73,7 +77,13 @@ fn tiled_decode_attention_matches_cpu_for_partial_tiles_and_grouped_heads() -> R
             let kh = h / 2;
             let weights: Vec<_> = (0..length)
                 .map(|p| {
-                    (queries[h * 256] as f64 * half::f16::from_f32(key(p, kh)).to_f64() * 16.0)
+                    ((0..256)
+                        .map(|d| {
+                            queries[h * 256 + d] as f64
+                                * half::f16::from_f32(key(p, kh, d)).to_f64()
+                        })
+                        .sum::<f64>()
+                        / 16.0)
                         .exp()
                 })
                 .collect();

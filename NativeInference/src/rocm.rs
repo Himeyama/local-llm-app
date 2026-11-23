@@ -199,6 +199,7 @@ impl Gpu {
             "prepare_qk",
             "store_kv",
             "attention_scores",
+            "attention_scores_decode",
             "attention_output",
             "attention_softmax",
             "attention_value_tiles",

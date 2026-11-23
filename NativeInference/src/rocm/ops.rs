@@ -421,21 +421,37 @@ impl Gpu {
         let mut heads = u32::try_from(shape.heads)?;
         let mut kv_heads = u32::try_from(shape.kv_heads)?;
         let mut batch = u32::try_from(batch)?;
-        self.launch(
-            "attention_scores",
-            (heads * batch * length).div_ceil(256),
-            256,
-            &mut [
-                arg(&mut q),
-                arg(&mut kc),
-                arg(&mut s),
-                arg(&mut length),
-                arg(&mut heads),
-                arg(&mut kv_heads),
-                arg(&mut batch),
-                arg(&mut pos),
-            ],
-        )?;
+        if batch == 1 {
+            self.launch(
+                "attention_scores_decode",
+                (heads * length).div_ceil(8),
+                256,
+                &mut [
+                    arg(&mut q),
+                    arg(&mut kc),
+                    arg(&mut s),
+                    arg(&mut length),
+                    arg(&mut heads),
+                    arg(&mut kv_heads),
+                ],
+            )?;
+        } else {
+            self.launch(
+                "attention_scores",
+                (heads * batch * length).div_ceil(256),
+                256,
+                &mut [
+                    arg(&mut q),
+                    arg(&mut kc),
+                    arg(&mut s),
+                    arg(&mut length),
+                    arg(&mut heads),
+                    arg(&mut kv_heads),
+                    arg(&mut batch),
+                    arg(&mut pos),
+                ],
+            )?;
+        }
         let mut g = gate.pointer;
         let mut y = result.pointer;
         if self.decode_attention_tiling && batch == 1 && length >= 256 {

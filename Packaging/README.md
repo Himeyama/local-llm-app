@@ -36,7 +36,7 @@ hsis と Node.js の初回取得、NuGet の復元にはネットワーク接続
 ```powershell
 .\Build-Installer.ps1
 # アプリのバージョンを指定する場合
-.\Build-Installer.ps1 -Version 0.1.4
+.\Build-Installer.ps1 -Version 0.1.5
 ```
 
 アプリバージョンは `LocalLlm.Gui.csproj` の `Version` を使用します。明示する場合も同じ番号が必要です。hsis 自体の `0.11.2` とは別です。

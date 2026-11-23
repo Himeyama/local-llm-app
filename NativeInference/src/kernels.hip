@@ -312,6 +312,19 @@ extern "C" __global__ void attention_scores(const float* q,const _Float16* kc,fl
     for (unsigned j = 0; j < 256; j++) sum += q[h * 256 + j] * kc[((unsigned long long)p * kv_heads + kh) * 256 + j];
     scores[i] = sum / 16.0f;
 }
+// For decode, adjacent lanes cooperate on one dot product. This makes the
+// FP16 key loads contiguous instead of striding by an entire KV vector.
+extern "C" __global__ void attention_scores_decode(const float* q,const _Float16* kc,float* scores,unsigned length,unsigned heads,unsigned kv_heads) {
+    unsigned lane = threadIdx.x % 32;
+    unsigned i = blockIdx.x * (blockDim.x / 32) + threadIdx.x / 32;
+    if (i >= length * heads) return;
+    unsigned h = i / length, p = i % length, kh = h / (heads / kv_heads);
+    float sum = 0;
+    for (unsigned j = lane; j < 256; j += 32)
+        sum += q[h * 256 + j] * kc[((unsigned long long)p * kv_heads + kh) * 256 + j];
+    for (unsigned step = 16; step; step /= 2) sum += __shfl_down(sum, step, 32);
+    if (lane == 0) scores[i] = sum / 16.0f;
+}
 extern "C" __global__ void attention_output(float* scores,const _Float16* vc,const float* gate,float* y,unsigned length,unsigned heads,unsigned kv_heads) {
     __shared__ float reduction[256];
     unsigned h = blockIdx.x, t = threadIdx.x, kh = (h % heads) / (heads / kv_heads);
