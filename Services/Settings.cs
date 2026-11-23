@@ -21,6 +21,8 @@ public sealed class Settings
     public bool ServerLanAccess { get; set; } = false;
     public string CliWorkingDirectory { get; set; } = "";
     public bool ChatWebEnabled { get; set; } = true;
+    public string ChatProvider { get; set; } = "local";
+    public string GeminiUrl { get; set; } = "http://localhost:8765/ai-foundation/chat-ai/gemini/gemini-3.5-flash:streamGenerateContentSse";
     public bool ChatWritesEnabled { get; set; } = true;
     public bool ChatCommandsEnabled { get; set; } = true;
     public string ChatReasoningEffort { get; set; } = "xhigh";

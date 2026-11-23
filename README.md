@@ -157,3 +157,14 @@ GGUF モデルは含めません。インストール後、サーバー設定で
 ```
 
 成果物と SHA-256 は `publish/installer/` に出力します。構成、ビルド環境、展開検証は [Packaging/README.md](Packaging/README.md) に記載しています。
+# Gemini 接続（隠し設定）
+
+画面左下のモデル表示を右クリックし、「Gemini」と SSE エンドポイントの完全な URL を指定して保存します。ローカル LLM に戻す場合は同じ操作で「ローカル LLM」を選びます。設定は再起動後も保持されます。指定 URL は SDK の URL 制約を受けず、そのまま POST 先に使われます。
+
+プロキシは Gemini の `generateContent` 形式の JSON リクエスト（`contents`、`systemInstruction`、`tools`）を受け、Gemini 形式の JSON を `data:` フィールドで送る SSE を返してください。最後の候補には `finishReason: "STOP"` を含めてください。認証が必要な場合はプロキシ側で処理してください。アプリには API キー設定はありません。Gemini では `/compress` と自動会話圧縮は使えません。
+
+開発用のダミーは `python tests/gemini_sse_dummy.py` で起動し、URL に `http://localhost:8765/ai-foundation/chat-ai/gemini/gemini-3.5-flash:streamGenerateContentSse` を指定します。これは固定の応答を返し、実際の Gemini には接続しません。終了は Ctrl+C です。
+
+実際の Gemini に接続するには、環境変数 `GEMINI_API_KEY` を設定した端末で `python GeminiProxy/gemini_proxy.py` を起動し、同じ URL を指定します。ダミーとプロキシは同じポートを使用するため、同時には起動できません。プロキシはローカル接続のみを受け付け、キーを Google へのリクエストヘッダーに付けます。終了は Ctrl+C です。
+
+この開発用プロキシは URL のモデル名にかかわらず、低価格の `gemini-3.1-flash-lite` に転送します。画像などを含むリクエスト全体は 20 MB までです。Windows のユーザー環境変数を直接読み直す場合は `python GeminiProxy/gemini_proxy.py --user-env` を使います。

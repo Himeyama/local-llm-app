@@ -33,6 +33,19 @@ var root = Path.Combine(Path.GetTempPath(), "LocalLlmChat-tests-" + Guid.NewGuid
 Directory.CreateDirectory(root);
 try
 {
+    var geminiHandler = new GeminiHandler();
+    var geminiSession = new ChatSession();
+    geminiSession.Messages.Add(new JsonObject { ["role"] = "user", ["content"] = "こんにちは" });
+    var geminiProgress = new CapturingProgress();
+    await new GeminiChatClient(new HttpClient(geminiHandler), "http://localhost/custom:stream").GenerateAsync(geminiSession, new ChatTools(root, false, false), geminiProgress, () => { }, default, "medium");
+    Assert(geminiHandler.Path == "/custom:stream" && geminiSession.Messages.Last()["content"]!.GetValue<string>() == "こんにちは世界" && geminiSession.ContextTokens == 7, "Gemini custom URL, SSE chunks or usage failed");
+    Assert(geminiHandler.Request!["generationConfig"]!["thinkingConfig"]!["thinkingLevel"]!.GetValue<string>() == "medium" && geminiHandler.Request["generationConfig"]!["thinkingConfig"]!["includeThoughts"]!.GetValue<bool>(), "Gemini thinking configuration missing");
+    Assert(geminiSession.Messages.Last()["reasoning_content"]!.GetValue<string>() == "考えます" && geminiProgress.Updates.Any(u => u.Reasoning == "考えます"), "Gemini reasoning must stream and persist separately");
+    foreach (var (effort, level) in new[] { ("none", "minimal"), ("low", "low"), ("medium", "medium"), ("xhigh", "high") }) {
+        var levelHandler = new GeminiHandler();
+        await new GeminiChatClient(new HttpClient(levelHandler), "http://localhost/custom:stream").GenerateAsync(new ChatSession(), new ChatTools(root, false, false), new SilentProgress(), () => { }, default, effort);
+        Assert(levelHandler.Request!["generationConfig"]!["thinkingConfig"]!["thinkingLevel"]!.GetValue<string>() == level, "Gemini thinking level mapping incorrect");
+    }
     var tools = new ChatTools(root, false, true, Path.Combine(root, "chat-backups"));
     int browserCalls = 0;
     Task<string> Browser(JsonObject args, CancellationToken ct) { ct.ThrowIfCancellationRequested(); browserCalls++; return Task.FromResult(args["action"]!.GetValue<string>()); }
@@ -322,6 +335,20 @@ sealed class CapturingProgress : IProgress<ChatProgress>
     public List<ChatProgress> Updates { get; } = new();
     public void Report(ChatProgress value) => Updates.Add(value);
 }
+sealed class GeminiHandler : HttpMessageHandler
+{
+    public string? Path { get; private set; }
+    public JsonObject? Request { get; private set; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Path = request.RequestUri!.AbsolutePath;
+        Request = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!.AsObject();
+        string sse = "data:{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"考えます\",\"thought\":true},{\"text\":\"こんにちは\"}]}}]}\n\n" +
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"世界\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"totalTokenCount\":7}}\n\n";
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sse, Encoding.UTF8, "text/event-stream") };
+    }
+}
+
 sealed class MockHandler : HttpMessageHandler
 {
     public Queue<string> Responses { get; } = new();

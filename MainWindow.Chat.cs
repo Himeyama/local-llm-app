@@ -13,6 +13,29 @@ namespace LocalLlm.Gui;
 
 public sealed partial class MainWindow
 {
+    private bool ChatAvailable => settings.ChatProvider == "gemini" || serverStatus.IsConnected;
+
+    private async void OnModelRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (chatCancellation != null || handlingChatCommand) return;
+        ComboBox provider = new() { Header = "モデルの種類", HorizontalAlignment = HorizontalAlignment.Stretch };
+        provider.Items.Add("ローカル LLM"); provider.Items.Add("Gemini");
+        provider.SelectedIndex = settings.ChatProvider == "gemini" ? 1 : 0;
+        TextBox url = new() { Header = "URL", Text = settings.GeminiUrl, HorizontalAlignment = HorizontalAlignment.Stretch };
+        url.Visibility = provider.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+        provider.SelectionChanged += (_, _) => url.Visibility = provider.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+        StackPanel content = new() { Spacing = 12 }; content.Children.Add(provider); content.Children.Add(url);
+        ContentDialog dialog = new() { XamlRoot = LlamaStatusButton.XamlRoot, Title = "モデル切り替え", Content = content, PrimaryButtonText = "保存", CloseButtonText = "キャンセル" };
+        dialog.PrimaryButtonClick += (_, args) => {
+            if (provider.SelectedIndex == 1 && (!Uri.TryCreate(url.Text.Trim(), UriKind.Absolute, out Uri? uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))) {
+                args.Cancel = true; url.Header = "URL（http または https の絶対 URL を入力してください）"; return;
+            }
+            settings.ChatProvider = provider.SelectedIndex == 1 ? "gemini" : "local";
+            settings.GeminiUrl = url.Text.Trim(); settings.Save(); UpdateStatus();
+        };
+        await dialog.ShowAsync();
+    }
     private readonly ChatStore chatStore = new(Path.Combine(Settings.DataDirectory, "chats"));
     private readonly HttpClient chatHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly List<ChatSession> chatSessions = new();
@@ -222,7 +245,7 @@ public sealed partial class MainWindow
             return;
         }
         bool busy = chatCancellation != null || handlingChatCommand;
-        SendChatButton.IsEnabled = !gitBusy && (serverStatus.IsConnected || ChatCommands.Parse(ChatInput.Text) == "clear");
+        SendChatButton.IsEnabled = !gitBusy && (ChatAvailable || ChatCommands.Parse(ChatInput.Text) == "clear");
         StopChatButton.IsEnabled = chatCancellation != null || chatCommandCancellation != null;
         SendChatButton.Visibility = Visibility.Visible;
         StopChatButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
@@ -238,6 +261,7 @@ public sealed partial class MainWindow
 
     private void UpdateChatStatus()
     {
+        if (settings.ChatProvider == "gemini") { ChatStatusText.Text = $"Gemini ｜ トークン: {currentChat?.ContextTokens?.ToString("N0") ?? "—"}"; return; }
         ChatStatusText.Visibility = page == "chat" ? Visibility.Visible : Visibility.Collapsed;
         var used = currentChat?.ContextTokens ?? (currentChat?.Messages.Count == 0 && currentChat.Summary.Length == 0 ? 0 : (int?)null);
         var percentage = used is >= 0 && maximumChatContext is > 0 ? (100d * used.Value / maximumChatContext.Value).ToString("0.#") : "—";
@@ -517,7 +541,7 @@ public sealed partial class MainWindow
         try
         {
             var levels = new ComboBox { Header = "推論レベル", HorizontalAlignment = HorizontalAlignment.Stretch };
-            foreach (var (label, value) in new[] { ("オフ", "none"), ("低", "low"), ("中", "medium"), ("最高", "xhigh") })
+            foreach (var (label, value) in new[] { (settings.ChatProvider == "gemini" ? "最小（完全にはオフにできません）" : "オフ", "none"), ("低", "low"), ("中", "medium"), ("最高", "xhigh") })
             {
                 var item = new ComboBoxItem { Content = label, Tag = value }; levels.Items.Add(item);
                 if (value == settings.ChatReasoningEffort) levels.SelectedItem = item;
@@ -602,7 +626,7 @@ public sealed partial class MainWindow
         if (closing || gitBusy || currentChat == null) return;
         var text = ChatInput.Text.Trim(); var session = currentChat;
         if (ChatCommands.Parse(text) is { } command) { await RunChatCommandAsync(command, session); return; }
-        if (!serverStatus.IsConnected) return;
+        if (!ChatAvailable) return;
         if (!pendingMessages.TryGetValue(session.Id, out var pending)) pendingMessages[session.Id] = pending = new();
         bool hasInput = text.Length > 0 || attachments.Count > 0;
         bool retry = !hasInput && (session.Messages.LastOrDefault()?["role"]?.GetValue<string>() is "user" or "tool" || session.Messages.LastOrDefault()?["incomplete"]?.GetValue<bool>() == true);
@@ -631,7 +655,7 @@ public sealed partial class MainWindow
             var message = retry ? null : pending.Peek();
             if (!await GenerateChatTurnAsync(session, message, pending)) break;
             retry = false;
-        } while (!closing && !handlingChatCommand && serverStatus.IsConnected && pending.Count > 0);
+        } while (!closing && !handlingChatCommand && ChatAvailable && pending.Count > 0);
     }
 
     private void OnChatInputTextChanged(object sender, TextChangedEventArgs e)
@@ -641,6 +665,7 @@ public sealed partial class MainWindow
 
     private async Task RunChatCommandAsync(string command, ChatSession session)
     {
+        if (command == "compress" && settings.ChatProvider == "gemini") { ShowError("Gemini では会話の圧縮に対応していません。"); return; }
         if (handlingChatCommand) { ShowError("チャットコマンドを処理中です。"); return; }
         if (command == "compress" && !serverStatus.IsConnected) { ShowError("会話の圧縮にはサーバーへの接続が必要です。"); return; }
         if (command == "compress" && attachments.Count > 0) { ShowError("圧縮コマンドに画像は添付できません。画像を取り除いてください。"); return; }
@@ -729,7 +754,7 @@ public sealed partial class MainWindow
             streamingProgress = null;
             UpdateChatControls(); RenderConversation(); RefreshSessions();
             followChat = true; ScrollChatToEnd();
-            PageTitle.Text = session.Title; AppTitleBar.Subtitle = session.Title;
+            PageTitle.Text = session.Title;
             SetChatActivity("回答を待っています…");
             var progress = new Progress<ChatProgress>(update => {
                 if (closing || chatCancellation != cancellation) return;
@@ -745,14 +770,18 @@ public sealed partial class MainWindow
             generationSession = new ChatSession { Id = session.Id, Title = session.Title, Workspace = session.Workspace, WorkspaceId = session.WorkspaceId,
                 Summary = session.Summary, CompactedMessageCount = session.CompactedMessageCount, ContextTokens = session.ContextTokens,
                 Messages = session.Messages.Select(m => (JsonObject)m.DeepClone()).ToList() };
-            await Task.Run(() => new ChatClient(chatHttp).GenerateAsync(generationSession, tools, progress, () => {
+            Action saveGeneration = () => {
                 chatStore.Save(generationSession);
                 var snapshot = generationSession.Messages.Select(m => (JsonObject)m.DeepClone()).ToList();
                 var contextTokens = generationSession.ContextTokens;
                 var summary = generationSession.Summary;
                 var compactedCount = generationSession.CompactedMessageCount;
                 DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.Summary = summary; session.CompactedMessageCount = compactedCount; session.ContextTokens = contextTokens; session.UpdatedAt = generationSession.UpdatedAt; streamingProgress = null; RenderConversation(); } });
-            }, cancellation.Token, reasoningEffort));
+            };
+            string provider = settings.ChatProvider, url = settings.GeminiUrl;
+            await Task.Run(() => provider == "gemini"
+                ? new GeminiChatClient(chatHttp, url).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort)
+                : new ChatClient(chatHttp).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort));
             cancellation.Token.ThrowIfCancellationRequested();
             SetChatActivity("");
             return true;

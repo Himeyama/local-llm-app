@@ -42,10 +42,7 @@
 </ControlTemplate>
     </Grid.Resources>
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <TitleBar x:Name="AppTitleBar" Title="Local LLM" Subtitle="ローカル AI ワークスペース"
-              IsPaneToggleButtonVisible="True" PaneToggleRequested="OnPaneToggleRequested">
-      <TitleBar.IconSource><SymbolIconSource Symbol="Message"/></TitleBar.IconSource>
-    </TitleBar>
+    <TitleBar x:Name="AppTitleBar" IsPaneToggleButtonVisible="True" PaneToggleRequested="OnPaneToggleRequested"/>
     <Grid Grid.Row="1">
       <Grid.ColumnDefinitions><ColumnDefinition Width="56"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
       <StackPanel x:Name="MenuRail" Spacing="12" Padding="8,20,8,8">
@@ -237,7 +234,7 @@
           <Button x:Name="GitStatusPushButton" Click="OnGitPush" Background="Transparent" BorderThickness="0" Padding="4,0" MinHeight="0" MinWidth="0" FontSize="12" Visibility="Collapsed" AutomationProperties.Name="Git プッシュ"/>
         </StackPanel>
         <Grid Grid.Column="0">
-          <Button x:Name="LlamaStatusButton" Click="OnToggleServer" Padding="0" MinHeight="0" MinWidth="0" Background="Transparent" BorderThickness="0" VerticalAlignment="Center" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+          <Button x:Name="LlamaStatusButton" Click="OnToggleServer" RightTapped="OnModelRightTapped" Padding="0" MinHeight="0" MinWidth="0" Background="Transparent" BorderThickness="0" VerticalAlignment="Center" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
             <TextBlock TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
               <Run x:Name="LlamaStatusPrefix" Text="llama-server: "/><Run x:Name="LlamaStatusState"/><Run x:Name="LlamaStatusDetail" Text="確認中"/>
             </TextBlock>

@@ -277,7 +277,6 @@ public sealed partial class MainWindow : Window
         PageTitle.Text = page switch { "chat" => currentChat?.Title ?? "チャット", "investigation" => "脆弱性診断 · プロトタイプ", "server" => "llama-server", "cli" => "Claude / Codex", _ => "ログ" };
         PageTitle.Visibility = page == "chat" ? Visibility.Collapsed : Visibility.Visible;
         PageLayout.RowSpacing = page == "chat" ? 0 : 16;
-        AppTitleBar.Subtitle = PageTitle.Text;
         ChatWorkspaceLayout.Visibility = page == "chat" ? Visibility.Visible : Visibility.Collapsed;
         RefreshGitContext();
         InvestigationPanel.Visibility = page == "investigation" ? Visibility.Visible : Visibility.Collapsed;
@@ -434,6 +433,7 @@ public sealed partial class MainWindow : Window
         UpdateChatControls();
         UpdateCodexLanControls();
         SetConnectionStatus(LlamaStatusPrefix, LlamaStatusState, LlamaStatusDetail, "llama-server", serverStatus.Spinner, serverStatus.Message);
+        if (settings.ChatProvider == "gemini") { LlamaStatusPrefix.Text = "Gemini: "; LlamaStatusState.Text = ""; LlamaStatusDetail.Text = "選択中"; }
         var starting = serverStatus.IsStarting;
         var interval = TimeSpan.FromSeconds(starting ? 1 : 5);
         if (timer.Interval != interval) timer.Interval = interval;
