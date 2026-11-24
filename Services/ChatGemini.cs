@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -41,7 +40,7 @@ public sealed class GeminiChatClient(HttpClient client, string url, string authM
         {
             JsonObject request = new() { ["contents"] = contents.DeepClone(), ["systemInstruction"] = new JsonObject { ["parts"] = new JsonArray { new JsonObject { ["text"] = "Reply in the user's language. Use tools when needed; never pretend to access files. Workspace: " + session.Workspace } } }, ["tools"] = new JsonArray { new JsonObject { ["functionDeclarations"] = declarations.DeepClone() } } };
             request["generationConfig"] = new JsonObject { ["thinkingConfig"] = new JsonObject { ["thinkingLevel"] = thinkingLevel, ["includeThoughts"] = true } };
-            using HttpRequestMessage httpRequest = new(HttpMethod.Post, url) { Content = JsonContent.Create(request) };
+            using HttpRequestMessage httpRequest = new(HttpMethod.Post, url) { Content = new StringContent(request.ToJsonString(), Encoding.UTF8, "application/json") };
             switch (authMethod)
             {
                 case "none": break;

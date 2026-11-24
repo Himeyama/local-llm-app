@@ -39,6 +39,7 @@ try
     var geminiProgress = new CapturingProgress();
     await new GeminiChatClient(new HttpClient(geminiHandler), "http://localhost/custom:stream").GenerateAsync(geminiSession, new ChatTools(root, false, false), geminiProgress, () => { }, default, "medium");
     Assert(geminiHandler.Path == "/custom:stream" && geminiSession.Messages.Last()["content"]!.GetValue<string>() == "こんにちは世界" && geminiSession.ContextTokens == 7, "Gemini custom URL, SSE chunks or usage failed");
+    Assert(geminiHandler.ContentLength == geminiHandler.BodyLength && geminiHandler.ContentLength > 0, "Gemini request must include the UTF-8 Content-Length");
     foreach (var (method, header, expected) in new[] { ("none", "Authorization", ""), ("bearer", "Authorization", "Bearer test-key"), ("api-key", "api-key", "test-key"), ("x-api-key", "x-api-key", "test-key") }) {
         var authHandler = new GeminiHandler();
         await new GeminiChatClient(new HttpClient(authHandler), "http://localhost/custom:stream", method, "test-key").GenerateAsync(new ChatSession(), new ChatTools(root, false, false), new SilentProgress(), () => { }, default);
@@ -344,6 +345,8 @@ sealed class CapturingProgress : IProgress<ChatProgress>
 sealed class GeminiHandler : HttpMessageHandler
 {
     public Dictionary<string, string> Headers { get; } = new();
+    public long? ContentLength { get; private set; }
+    public int BodyLength { get; private set; }
     public string? Path { get; private set; }
     public JsonObject? Request { get; private set; }
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -351,7 +354,10 @@ sealed class GeminiHandler : HttpMessageHandler
         foreach (string name in new[] { "Authorization", "api-key", "x-api-key" })
             if (request.Headers.TryGetValues(name, out var values)) Headers[name] = string.Join(",", values);
         Path = request.RequestUri!.AbsolutePath;
-        Request = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!.AsObject();
+        ContentLength = request.Content!.Headers.ContentLength;
+        byte[] body = await request.Content.ReadAsByteArrayAsync(cancellationToken);
+        BodyLength = body.Length;
+        Request = JsonNode.Parse(body)!.AsObject();
         string sse = "data:{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"考えます\",\"thought\":true},{\"text\":\"こんにちは\"}]}}]}\n\n" +
             "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"世界\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"totalTokenCount\":7}}\n\n";
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sse, Encoding.UTF8, "text/event-stream") };
