@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace LocalLlm.Gui.Services;
 
 // The configured URL is the complete proxy endpoint, not a Google SDK base URL.
-public sealed class GeminiChatClient(HttpClient client, string url)
+public sealed class GeminiChatClient(HttpClient client, string url, string authMethod = "none", string apiKey = "")
 {
     public async Task GenerateAsync(ChatSession session, ChatTools tools, IProgress<ChatProgress> progress, Action save, CancellationToken ct, string reasoningEffort = "xhigh")
     {
@@ -42,6 +42,14 @@ public sealed class GeminiChatClient(HttpClient client, string url)
             JsonObject request = new() { ["contents"] = contents.DeepClone(), ["systemInstruction"] = new JsonObject { ["parts"] = new JsonArray { new JsonObject { ["text"] = "Reply in the user's language. Use tools when needed; never pretend to access files. Workspace: " + session.Workspace } } }, ["tools"] = new JsonArray { new JsonObject { ["functionDeclarations"] = declarations.DeepClone() } } };
             request["generationConfig"] = new JsonObject { ["thinkingConfig"] = new JsonObject { ["thinkingLevel"] = thinkingLevel, ["includeThoughts"] = true } };
             using HttpRequestMessage httpRequest = new(HttpMethod.Post, url) { Content = JsonContent.Create(request) };
+            switch (authMethod)
+            {
+                case "none": break;
+                case "bearer": httpRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey); break;
+                case "api-key": httpRequest.Headers.Add("api-key", apiKey); break;
+                case "x-api-key": httpRequest.Headers.Add("x-api-key", apiKey); break;
+                default: throw new ArgumentException("未対応の認証方式です。");
+            }
             httpRequest.Headers.Accept.ParseAdd("text/event-stream");
             using HttpResponseMessage response = await client.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, ct);
             if (response.StatusCode == System.Net.HttpStatusCode.RequestEntityTooLarge) throw new IOException("Gemini への送信内容が大きすぎます。添付画像を小さくするか、新しいチャットで再送信してください。");

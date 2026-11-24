@@ -39,6 +39,12 @@ try
     var geminiProgress = new CapturingProgress();
     await new GeminiChatClient(new HttpClient(geminiHandler), "http://localhost/custom:stream").GenerateAsync(geminiSession, new ChatTools(root, false, false), geminiProgress, () => { }, default, "medium");
     Assert(geminiHandler.Path == "/custom:stream" && geminiSession.Messages.Last()["content"]!.GetValue<string>() == "こんにちは世界" && geminiSession.ContextTokens == 7, "Gemini custom URL, SSE chunks or usage failed");
+    foreach (var (method, header, expected) in new[] { ("none", "Authorization", ""), ("bearer", "Authorization", "Bearer test-key"), ("api-key", "api-key", "test-key"), ("x-api-key", "x-api-key", "test-key") }) {
+        var authHandler = new GeminiHandler();
+        await new GeminiChatClient(new HttpClient(authHandler), "http://localhost/custom:stream", method, "test-key").GenerateAsync(new ChatSession(), new ChatTools(root, false, false), new SilentProgress(), () => { }, default);
+        Assert(authHandler.Headers.TryGetValue(header, out string? actual) ? actual == expected : expected == "", "Gemini authentication header incorrect: " + method);
+        Assert(authHandler.Headers.Count == (method == "none" ? 0 : 1), "Unexpected Gemini authentication headers: " + method);
+    }
     Assert(geminiHandler.Request!["generationConfig"]!["thinkingConfig"]!["thinkingLevel"]!.GetValue<string>() == "medium" && geminiHandler.Request["generationConfig"]!["thinkingConfig"]!["includeThoughts"]!.GetValue<bool>(), "Gemini thinking configuration missing");
     Assert(geminiSession.Messages.Last()["reasoning_content"]!.GetValue<string>() == "考えます" && geminiProgress.Updates.Any(u => u.Reasoning == "考えます"), "Gemini reasoning must stream and persist separately");
     foreach (var (effort, level) in new[] { ("none", "minimal"), ("low", "low"), ("medium", "medium"), ("xhigh", "high") }) {
@@ -337,10 +343,13 @@ sealed class CapturingProgress : IProgress<ChatProgress>
 }
 sealed class GeminiHandler : HttpMessageHandler
 {
+    public Dictionary<string, string> Headers { get; } = new();
     public string? Path { get; private set; }
     public JsonObject? Request { get; private set; }
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        foreach (string name in new[] { "Authorization", "api-key", "x-api-key" })
+            if (request.Headers.TryGetValues(name, out var values)) Headers[name] = string.Join(",", values);
         Path = request.RequestUri!.AbsolutePath;
         Request = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!.AsObject();
         string sse = "data:{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"考えます\",\"thought\":true},{\"text\":\"こんにちは\"}]}}]}\n\n" +

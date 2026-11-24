@@ -23,16 +23,30 @@ public sealed partial class MainWindow
         provider.Items.Add("ローカル LLM"); provider.Items.Add("Gemini");
         provider.SelectedIndex = settings.ChatProvider == "gemini" ? 1 : 0;
         TextBox url = new() { Header = "URL", Text = settings.GeminiUrl, HorizontalAlignment = HorizontalAlignment.Stretch };
-        url.Visibility = provider.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
-        provider.SelectionChanged += (_, _) => url.Visibility = provider.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
-        StackPanel content = new() { Spacing = 12 }; content.Children.Add(provider); content.Children.Add(url);
+        ComboBox auth = new() { Header = "認証方法", HorizontalAlignment = HorizontalAlignment.Stretch };
+        string[] authMethods = ["none", "bearer", "api-key", "x-api-key"];
+        foreach (string label in new[] { "認証なし", "Bearer", "api-key", "x-api-key" }) auth.Items.Add(label);
+        auth.SelectedIndex = Math.Max(0, Array.IndexOf(authMethods, settings.GeminiAuthMethod));
+        PasswordBox key = new() { Header = "キー", Password = settings.GeminiApiKey, HorizontalAlignment = HorizontalAlignment.Stretch };
+        void UpdateAuthVisibility() {
+            bool gemini = provider.SelectedIndex == 1;
+            url.Visibility = auth.Visibility = gemini ? Visibility.Visible : Visibility.Collapsed;
+            key.Visibility = gemini && auth.SelectedIndex != 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        provider.SelectionChanged += (_, _) => UpdateAuthVisibility();
+        auth.SelectionChanged += (_, _) => UpdateAuthVisibility();
+        UpdateAuthVisibility();
+        StackPanel content = new() { Spacing = 12 }; content.Children.Add(provider); content.Children.Add(url); content.Children.Add(auth); content.Children.Add(key);
         ContentDialog dialog = new() { XamlRoot = LlamaStatusButton.XamlRoot, Title = "モデル切り替え", Content = content, PrimaryButtonText = "保存", CloseButtonText = "キャンセル" };
         dialog.PrimaryButtonClick += (_, args) => {
             if (provider.SelectedIndex == 1 && (!Uri.TryCreate(url.Text.Trim(), UriKind.Absolute, out Uri? uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))) {
                 args.Cancel = true; url.Header = "URL（http または https の絶対 URL を入力してください）"; return;
             }
+            if (provider.SelectedIndex == 1 && auth.SelectedIndex != 0 && string.IsNullOrWhiteSpace(key.Password)) {
+                args.Cancel = true; key.Header = "キーを入力してください"; return;
+            }
             settings.ChatProvider = provider.SelectedIndex == 1 ? "gemini" : "local";
-            settings.GeminiUrl = url.Text.Trim(); settings.Save(); UpdateStatus();
+            settings.GeminiUrl = url.Text.Trim(); settings.GeminiAuthMethod = authMethods[auth.SelectedIndex]; settings.GeminiApiKey = key.Password.Trim(); settings.Save(); UpdateStatus();
         };
         await dialog.ShowAsync();
     }
@@ -778,9 +792,9 @@ public sealed partial class MainWindow
                 var compactedCount = generationSession.CompactedMessageCount;
                 DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.Summary = summary; session.CompactedMessageCount = compactedCount; session.ContextTokens = contextTokens; session.UpdatedAt = generationSession.UpdatedAt; streamingProgress = null; RenderConversation(); } });
             };
-            string provider = settings.ChatProvider, url = settings.GeminiUrl;
+            string provider = settings.ChatProvider, url = settings.GeminiUrl, authMethod = settings.GeminiAuthMethod, apiKey = settings.GeminiApiKey;
             await Task.Run(() => provider == "gemini"
-                ? new GeminiChatClient(chatHttp, url).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort)
+                ? new GeminiChatClient(chatHttp, url, authMethod, apiKey).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort)
                 : new ChatClient(chatHttp).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort));
             cancellation.Token.ThrowIfCancellationRequested();
             SetChatActivity("");
