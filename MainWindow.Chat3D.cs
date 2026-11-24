@@ -69,10 +69,10 @@ public sealed partial class MainWindow
                 string text = message["content"] is JsonArray parts
                     ? string.Join("\n", parts.Select(part => part?["type"]?.GetValue<string>() == "text" ? part?["text"]?.GetValue<string>() : "[画像]").Where(value => !string.IsNullOrEmpty(value)))
                     : message["content"]?.GetValue<string>() ?? "";
-                if (!string.IsNullOrWhiteSpace(text) || role == "tool") entries.Add(new { role, text, name = message["name"]?.GetValue<string>() ?? "", toolId = ShortToolId(message["tool_call_id"]?.GetValue<string>()) });
+                if (!string.IsNullOrWhiteSpace(text) || role == "tool") entries.Add(new { role, text, name = message["name"]?.GetValue<string>() ?? "", toolId = ShortToolId(message["tool_call_id"]?.GetValue<string>()), toolFullId = message["tool_call_id"]?.GetValue<string>() ?? "" });
                 if (message["tool_calls"] is JsonArray calls)
                     foreach (JsonNode? call in calls)
-                        entries.Add(new { role = "call", text = call?["function"]?["arguments"]?.GetValue<string>() ?? "", name = call?["function"]?["name"]?.GetValue<string>() ?? "tool", toolId = ShortToolId(call?["id"]?.GetValue<string>()) });
+                        entries.Add(new { role = "call", text = call?["function"]?["arguments"]?.GetValue<string>() ?? "", name = call?["function"]?["name"]?.GetValue<string>() ?? "tool", toolId = ShortToolId(call?["id"]?.GetValue<string>()), toolFullId = call?["id"]?.GetValue<string>() ?? "" });
             }
         }
         string payload = JsonSerializer.Serialize(new { type = "conversation", sessionId = currentChat?.Id ?? "", title = currentChat?.Title ?? "会話", theme = RootLayout.ActualTheme == ElementTheme.Dark ? "dark" : "light", entries });
