@@ -92,6 +92,8 @@ public sealed partial class MainWindow
             SaveWorkspacePaneLayout();
         }
         RefreshSessions(); RenderConversation();
+        RootLayout.ActualThemeChanged += (_, _) => UpdateChatMap();
+        Closed += (_, _) => { chatMapReady = false; chatMap?.Close(); chatMap = null; };
         Closed += (_, _) => { chatSpinnerTimer.Stop(); chatCancellation?.Cancel(); chatHttp.Dispose(); CloseConsoles(); };
     }
 
@@ -285,6 +287,7 @@ public sealed partial class MainWindow
     private void RenderConversation()
     {
         if (closing) return;
+        UpdateChatMap();
         var previousOffset = ChatScroll.VerticalOffset;
         updatingChatScroll = true;
         try { RenderConversationContent(); }
