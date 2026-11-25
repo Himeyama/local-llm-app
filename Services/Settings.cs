@@ -41,6 +41,7 @@ public sealed class Settings
     public bool? ConsoleExpanded { get; set; }
     public double ConsoleHeight { get; set; } = 280;
     public double EditorWidthRatio { get; set; } = 0.5;
+    public double HistoryPaneWidth { get; set; } = 240;
     public double ExplorerPaneHeight { get; set; } = 240;
     public double GitPaneHeight { get; set; } = 320;
     public bool ExplorerSectionExpanded { get; set; } = true;

@@ -17,6 +17,7 @@ public sealed partial class FileEditorView
     private Button? back, forward;
     private Task? webInitialization;
     private readonly HashSet<string> browserFileUrls = new(StringComparer.OrdinalIgnoreCase);
+    public bool IsBrowserOpen => webTab != null;
 
     public async Task OpenBrowserFileAsync(string path)
     {

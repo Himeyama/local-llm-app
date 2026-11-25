@@ -12,6 +12,7 @@ public sealed partial class MainWindow
     private double explorerDragHeight, explorerDragDistance;
     private double gitDragHeight, gitDragDistance;
     private double explorerHeight = 240, gitHeight = 320;
+    private double historyWidth = 240, historyDragWidth, historyDragDistance;
     private bool chatSectionExpanded = true, gitSectionExpanded = true, arrangingHistory;
     private const double SectionHeaderHeight = 32;
     private bool restoringHistory;
@@ -20,6 +21,8 @@ public sealed partial class MainWindow
     {
         restoringHistory = true;
         try {
+            historyWidth = double.IsFinite(settings.HistoryPaneWidth) ? Math.Clamp(settings.HistoryPaneWidth, 160, 800) : 240;
+            ApplyHistoryWidth();
             explorerHeight = double.IsFinite(settings.ExplorerPaneHeight) ? Math.Max(100, settings.ExplorerPaneHeight) : 240;
             gitHeight = double.IsFinite(settings.GitPaneHeight) ? Math.Max(160, settings.GitPaneHeight) : 320;
             ExplorerPane.SetExpanded(settings.ExplorerSectionExpanded);
@@ -34,12 +37,48 @@ public sealed partial class MainWindow
     {
         if (restoringHistory) return;
         settings.ExplorerPaneHeight = explorerHeight;
+        settings.HistoryPaneWidth = historyWidth;
         settings.GitPaneHeight = gitHeight;
         settings.ExplorerSectionExpanded = ExplorerPane.IsExpanded;
         settings.ChatSectionExpanded = chatSectionExpanded;
         settings.GitSectionExpanded = gitSectionExpanded;
         try { settings.Save(); }
         catch (Exception ex) { ShowError("パネルの配置を保存できません: " + ex.Message); }
+    }
+
+    private void OnHistoryWidthResizeStarted(object sender, DragStartedEventArgs args)
+    {
+        historyDragWidth = HistoryPane.ActualWidth; historyDragDistance = 0;
+    }
+
+    private void OnHistoryWidthResizeDelta(object sender, DragDeltaEventArgs args)
+    {
+        historyDragDistance += args.HorizontalChange;
+        SetHistoryWidth(historyDragWidth + historyDragDistance);
+    }
+
+    private void OnHistoryWidthResizeKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key is not (VirtualKey.Left or VirtualKey.Right)) return;
+        args.Handled = true;
+        SetHistoryWidth(HistoryPane.ActualWidth + (args.Key == VirtualKey.Right ? 16 : -16));
+    }
+
+    private void SetHistoryWidth(double width)
+    {
+        double maximum = Math.Max(160, Math.Min(800, RootLayout.ActualWidth - 56 - 320));
+        historyWidth = Math.Clamp(width, 160, maximum);
+        ApplyHistoryWidth();
+        SaveHistoryLayout();
+    }
+
+    private void OnHistoryWidthHostSizeChanged(object sender, SizeChangedEventArgs args) => ApplyHistoryWidth();
+
+    private void ApplyHistoryWidth()
+    {
+        if (HistoryPane == null || RootLayout == null) return;
+        double maximum = RootLayout.ActualWidth > 0 ? Math.Max(160, Math.Min(800, RootLayout.ActualWidth - 56 - 320)) : 800;
+        HistoryPane.Width = Math.Clamp(historyWidth, 160, maximum);
     }
 
     private void OnExplorerExpansionChanged()

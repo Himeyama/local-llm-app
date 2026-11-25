@@ -13,7 +13,7 @@ public sealed partial class MainWindow
 
     private async void OnToggleConsole(object sender, RoutedEventArgs e)
     {
-        if (currentChat == null) return;
+        if (currentChat == null) { UpdateConsoleButton(); return; }
         var session = currentChat;
         var open = settings.ConsoleExpanded != true;
         settings.ConsoleExpanded = open;
@@ -22,6 +22,8 @@ public sealed partial class MainWindow
         if (!open) { ConsolePanel.Visibility = Visibility.Collapsed; return; }
         await OpenConsoleAsync(session);
     }
+
+    private void UpdateConsoleButton() => ChatConsoleButton.IsChecked = ConsolePanel.Visibility == Visibility.Visible;
 
     private void RestoreConsoleVisibility()
     {

@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using System.Diagnostics;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 
@@ -110,6 +111,20 @@ public sealed partial class WorkspaceExplorerView
         return Task.CompletedTask;
     }
 
+    private static Task ShowInExplorerAsync(WorkspaceEntry entry)
+    {
+        if (entry.IsDirectory ? !Directory.Exists(entry.Path) : !File.Exists(entry.Path))
+            throw new IOException("ファイルまたはフォルダーが見つかりません。");
+        ProcessStartInfo start = new()
+        {
+            FileName = "explorer.exe",
+            Arguments = entry.IsDirectory ? $"\"{entry.Path}\"" : $"/select,\"{entry.Path}\"",
+            UseShellExecute = true
+        };
+        Process.Start(start);
+        return Task.CompletedTask;
+    }
+
     private async Task PasteAsync(WorkspaceEntry entry)
     {
         if (!entry.IsDirectory) throw new IOException("貼り付け先のフォルダーを選択してください。");
@@ -152,6 +167,8 @@ public sealed partial class WorkspaceExplorerView
         try { canPaste = entry.CanExpand && Clipboard.GetContent().Contains(StandardDataFormats.StorageItems); }
         catch (Exception) { canPaste = false; }
         var menu = new MenuFlyout();
+        AddMenu(menu, entry.IsDirectory ? "エクスプローラーで表示" : "場所を開く", "\uE8B7", () => ShowInExplorerAsync(entry));
+        menu.Items.Add(new MenuFlyoutSeparator());
         if (!entry.IsDirectory && BrowserFiles.IsHtml(entry.Path)) {
             AddMenu(menu, "編集", "\uE70F", () => { FileEditRequested?.Invoke(entry.Path); return Task.CompletedTask; });
             menu.Items.Add(new MenuFlyoutSeparator());

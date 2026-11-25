@@ -17,6 +17,8 @@ public sealed partial class MainWindow
         FileEditor.AutoSaveEnabled = settings.EditorAutoSave;
         FileEditor.WordWrapEnabled = settings.EditorWordWrap;
         FileEditor.Changed += UpdateEditorLayout;
+        ConsolePanel.RegisterPropertyChangedCallback(UIElement.VisibilityProperty, (_, _) => UpdateConsoleButton());
+        UpdateConsoleButton();
         FileEditor.Failed += message => { if (!closing) ShowError("エディタ: " + message); };
         ExplorerPane.FileOpenRequested += async path => {
             try {
@@ -45,6 +47,7 @@ public sealed partial class MainWindow
 
     private void UpdateEditorLayout()
     {
+        ChatBrowserButton.IsChecked = FileEditor.IsBrowserOpen;
         bool visible = FileEditor.TabCount > 0;
         var visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (EditorPane.Visibility != visibility) {
@@ -95,6 +98,7 @@ public sealed partial class MainWindow
     {
         try { await FileEditor.OpenBrowserAsync(); }
         catch (Exception ex) { ShowError("ブラウザ: " + ex.Message); }
+        finally { ChatBrowserButton.IsChecked = FileEditor.IsBrowserOpen; }
     }
     private async void OnEditorEncodingClick(object sender, RoutedEventArgs args) => await FileEditor.ChangeEncodingAsync();
     private async void OnEditorLineEndingClick(object sender, RoutedEventArgs args) => await FileEditor.ChangeLineEndingAsync();
