@@ -308,6 +308,7 @@ fn generate(model: &mut Model, tokenizer: &Tokenizer, alias: &str, job: &mut Job
         job.request["reasoning_effort"].as_str().unwrap_or("none") != "none",
         &id,
     );
+    output.set_tools(job.request["tools"].clone());
     let mut pending_bytes = Vec::new();
     let mut generated = 0;
     let mut decode_evaluations = 0;

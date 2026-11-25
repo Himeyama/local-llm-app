@@ -64,12 +64,12 @@ impl Prompt {
                     Ok(tool["function"].clone())
                 })
                 .collect::<Result<Vec<_>>>()?;
-            text.push_str("<|im_start|>system\nYou may call functions described in <tools>. Return each call as <tool_call>{\"name\":\"function_name\",\"arguments\":{}}</tool_call>.\n<tools>\n");
+            text.push_str("<|im_start|>system\n# Tools\n\nYou have access to the following functions:\n\n<tools>\n");
             for function in functions {
                 text.push_str(&serde_json::to_string(&function)?);
                 text.push('\n');
             }
-            text.push_str("</tools><|im_end|>\n");
+            text.push_str("</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nvalue_2\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\n- Function calls MUST use an inner <function=...></function> block inside <tool_call></tool_call>.\n- Required parameters MUST be specified.\n- You may reason before the function call, but not after it.\n- If no function is available, answer normally.\n</IMPORTANT><|im_end|>\n");
         }
         for message in messages {
             let role = message["role"].as_str().ok_or("Missing message role")?;
@@ -110,11 +110,21 @@ impl Prompt {
                             .as_str()
                             .ok_or("Invalid prior tool arguments")?,
                     )?;
-                    text.push_str("\n<tool_call>");
-                    text.push_str(&serde_json::to_string(
-                        &json!({"name":call["function"]["name"],"arguments":arguments}),
-                    )?);
-                    text.push_str("</tool_call>");
+                    let name = call["function"]["name"]
+                        .as_str()
+                        .ok_or("Invalid prior function name")?;
+                    let arguments = arguments
+                        .as_object()
+                        .ok_or("Invalid prior tool arguments")?;
+                    text.push_str(&format!("\n<tool_call>\n<function={name}>\n"));
+                    for (key, value) in arguments {
+                        let value = match value {
+                            Value::String(s) => s.clone(),
+                            _ => serde_json::to_string(value)?,
+                        };
+                        text.push_str(&format!("<parameter={key}>\n{value}\n</parameter>\n"));
+                    }
+                    text.push_str("</function>\n</tool_call>");
                 }
             }
             text.push_str("<|im_end|>\n");
@@ -141,6 +151,7 @@ pub struct Output {
     tool: bool,
     tool_index: usize,
     request_id: String,
+    tools: Value,
     pub content: String,
     pub thoughts: String,
     pub calls: Vec<Value>,
@@ -153,6 +164,9 @@ impl Output {
             ..Self::default()
         }
     }
+    pub fn set_tools(&mut self, tools: Value) {
+        self.tools = tools;
+    }
     /// Returns OpenAI delta objects. A trailing partial tag stays buffered so
     /// markup split across tokenizer pieces never leaks into visible content.
     pub fn push(&mut self, text: &str, finished: bool) -> Result<Vec<Value>> {
@@ -161,16 +175,24 @@ impl Output {
         loop {
             if self.tool {
                 let Some(end) = self.pending.find("</tool_call>") else {
+                    if finished {
+                        return Err(
+                            "Model returned an incomplete tool call; retry the request".into()
+                        );
+                    }
                     break;
                 };
-                let call: Value = serde_json::from_str(self.pending[..end].trim())?;
-                let name = call["name"]
-                    .as_str()
-                    .filter(|n| !n.is_empty())
-                    .ok_or("Model returned an invalid function name")?;
-                if !call["arguments"].is_object() {
-                    return Err("Model returned non-object function arguments".into());
+                let raw = self.pending[..end].trim();
+                let call = parse_tool_call(raw, &self.tools);
+                let valid = call.as_ref().is_some_and(|call| {
+                    call["name"].as_str().is_some_and(|name| !name.is_empty())
+                        && call["arguments"].is_object()
+                });
+                if !valid {
+                    return Err("Model returned a malformed tool call; retry the request".into());
                 }
+                let call = call.expect("validated tool call");
+                let name = call["name"].as_str().expect("validated function name");
                 let function =
                     json!({"name":name,"arguments":serde_json::to_string(&call["arguments"])?});
                 let id = format!("call_{}_{}", self.request_id, self.tool_index);
@@ -217,8 +239,6 @@ impl Output {
             self.emit(&segment, &mut deltas);
             break;
         }
-        // An incomplete tool block on a length stop is intentionally withheld.
-        // The client can retry; truncated arguments must never be executed.
         Ok(deltas)
     }
     fn emit(&mut self, text: &str, deltas: &mut Vec<Value>) {
@@ -233,6 +253,58 @@ impl Output {
             deltas.push(json!({"content":text}));
         }
     }
+}
+
+// Some models omit the key for the function name and place parameters at the
+// top level: {"read_file", "path":"a"}. Recover only this unambiguous form.
+fn parse_tool_call(raw: &str, tools: &Value) -> Option<Value> {
+    if let Some(rest) = raw.strip_prefix("<function=") {
+        let (name, rest) = rest.split_once('>')?;
+        if name.is_empty() || name.contains(['<', '\n', '\r']) {
+            return None;
+        }
+        let mut rest = rest.strip_suffix("</function>")?.trim();
+        let schema = tools
+            .as_array()
+            .and_then(|tools| tools.iter().find(|tool| tool["function"]["name"] == name));
+        let mut arguments = serde_json::Map::new();
+        while !rest.is_empty() {
+            rest = rest.strip_prefix("<parameter=")?;
+            let (key, body) = rest.split_once('>')?;
+            if key.is_empty() || key.contains(['<', '\n', '\r']) || arguments.contains_key(key) {
+                return None;
+            }
+            let (value, tail) = body.split_once("</parameter>")?;
+            let value = value
+                .strip_prefix('\n')
+                .unwrap_or(value)
+                .strip_suffix('\n')
+                .unwrap_or(value.strip_prefix('\n').unwrap_or(value));
+            let kind = schema.and_then(|tool| {
+                tool["function"]["parameters"]["properties"][key]["type"].as_str()
+            });
+            let parsed = match kind {
+                Some("string") | None => Value::String(value.to_owned()),
+                Some(_) => serde_json::from_str(value).ok()?,
+            };
+            arguments.insert(key.to_owned(), parsed);
+            rest = tail.trim();
+        }
+        return Some(json!({"name":name,"arguments":arguments}));
+    }
+    if let Ok(call) = serde_json::from_str(raw) {
+        return Some(call);
+    }
+    let rest = raw.strip_prefix('{')?.trim_start();
+    let mut stream = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+    let name = stream.next()?.ok()?;
+    let rest = rest[stream.byte_offset()..]
+        .trim_start()
+        .strip_prefix(',')?;
+    let arguments: Value = serde_json::from_str(&format!("{{{rest}")).ok()?;
+    arguments
+        .is_object()
+        .then(|| json!({"name": name, "arguments": arguments}))
 }
 
 pub fn is_end(tokenizer: &Tokenizer, token: u32) -> Result<bool> {
@@ -270,9 +342,55 @@ mod tests {
     #[test]
     fn incomplete_tools_are_not_executable() {
         let mut out = Output::default();
-        out.push("before<tool_call>{\"name\":", true).unwrap();
+        assert!(out.push("before<tool_call>{\"name\":", true).is_err());
         assert_eq!(out.content, "before");
         assert!(out.calls.is_empty());
+    }
+    #[test]
+    fn missing_name_key_is_recovered() {
+        let mut out = Output::new(false, "test");
+        out.push(
+            "<tool_call>{\"list_directory\",\"path\":\".\"}</tool_call>",
+            true,
+        )
+        .unwrap();
+        assert_eq!(out.calls.len(), 1);
+        assert_eq!(out.calls[0]["function"]["name"], "list_directory");
+        assert_eq!(out.calls[0]["function"]["arguments"], "{\"path\":\".\"}");
+    }
+    #[test]
+    fn invalid_tool_shape_is_not_executed() {
+        let mut out = Output::default();
+        assert!(
+            out.push(
+                "<tool_call>{\"name\":\"bad\",\"arguments\":[]}</tool_call>",
+                true
+            )
+            .is_err()
+        );
+        assert!(out.calls.is_empty());
+        assert!(out.content.is_empty());
+    }
+    #[test]
+    fn nested_malformed_calls_are_rejected() {
+        let mut out = Output::default();
+        assert!(out.push("<tool_call>{\"list_directory\",\"path\":\".\"}<tool_call>{\"web_read\",\"url\":\"x\"}</tool_call>", true).is_err());
+        assert!(out.calls.is_empty());
+        assert!(out.content.is_empty());
+    }
+    #[test]
+    fn qwen_xml_tool_call_uses_parameter_types() {
+        let mut out = Output::new(false, "test");
+        out.set_tools(json!([{"function":{"name":"read", "parameters":{"properties":{"path":{"type":"string"},"limit":{"type":"integer"}}}}}]));
+        for part in [
+            "<tool_call>\n<function=read>\n<parameter=path>\n",
+            "true\n</parameter>\n<parameter=limit>\n5\n</parameter>\n</function>\n</tool_call>",
+        ] {
+            out.push(part, false).unwrap();
+        }
+        let arguments: Value =
+            serde_json::from_str(out.calls[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(arguments, json!({"path":"true", "limit":5}));
     }
     #[test]
     fn images_and_invalid_limits_are_rejected() {
