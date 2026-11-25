@@ -45,6 +45,7 @@ pub struct Model {
     current_valid: bool,
     last_logits: Option<Rc<Vec<f32>>>,
     checkpoint: Option<Checkpoint>,
+    previous_checkpoint: Option<Checkpoint>,
 }
 impl Model {
     pub fn load(file: &Gguf, sdk_bin: &Path, capacity: usize) -> Result<Self> {
@@ -194,6 +195,7 @@ impl Model {
             current_valid: true,
             last_logits: None,
             checkpoint: None,
+            previous_checkpoint: None,
         })
     }
     fn weight(&self, name: &str) -> Result<&Weight> {
@@ -237,6 +239,9 @@ impl Model {
         if let Some(checkpoint) = &mut self.checkpoint {
             checkpoint.valid = false;
         }
+        if let Some(checkpoint) = &mut self.previous_checkpoint {
+            checkpoint.valid = false;
+        }
         for state in &self.states {
             if let LayerState::Delta {
                 convolution,
@@ -256,10 +261,16 @@ impl Model {
         Ok(())
     }
     pub fn prepare_prompt(&mut self, prompt: &[u32]) -> Result<usize> {
-        let checkpoint = self
-            .checkpoint
-            .as_ref()
-            .filter(|c| c.valid)
+        let checkpoint = [&self.checkpoint, &self.previous_checkpoint]
+            .into_iter()
+            .flatten()
+            .filter(|c| {
+                c.valid
+                    && !c.tokens.is_empty()
+                    && prompt.len() > c.tokens.len()
+                    && prompt.starts_with(&c.tokens)
+            })
+            .max_by_key(|c| c.tokens.len())
             .map(|c| c.tokens.as_slice());
         match prompt_cache::choose(
             prompt,
@@ -272,7 +283,11 @@ impl Model {
             Reuse::Checkpoint(count) => {
                 self.current_valid = false;
                 self.last_logits = None;
-                let checkpoint = self.checkpoint.as_ref().ok_or("Missing checkpoint")?;
+                let checkpoint = [&self.checkpoint, &self.previous_checkpoint]
+                    .into_iter()
+                    .flatten()
+                    .find(|c| c.valid && c.tokens.len() == count && prompt.starts_with(&c.tokens))
+                    .ok_or("Missing checkpoint")?;
                 for (state, saved) in self.states.iter().zip(&checkpoint.recurrent) {
                     if let (
                         LayerState::Delta {
@@ -288,6 +303,14 @@ impl Model {
                 }
                 self.tokens = checkpoint.tokens.clone();
                 self.position = count;
+                for checkpoint in [&mut self.checkpoint, &mut self.previous_checkpoint]
+                    .into_iter()
+                    .flatten()
+                {
+                    if checkpoint.tokens.len() > count {
+                        checkpoint.valid = false;
+                    }
+                }
                 self.current_valid = true;
                 self.last_logits = None;
                 Ok(count)
@@ -297,6 +320,23 @@ impl Model {
                 Ok(0)
             }
         }
+    }
+    /// Report matching token counts only; never log the prompt itself.
+    pub fn checkpoint_overlap(&self, prompt: &[u32]) -> Option<(usize, usize)> {
+        [&self.checkpoint, &self.previous_checkpoint]
+            .into_iter()
+            .flatten()
+            .filter(|checkpoint| checkpoint.valid)
+            .map(|checkpoint| {
+                let common = checkpoint
+                    .tokens
+                    .iter()
+                    .zip(prompt)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                (common, checkpoint.tokens.len())
+            })
+            .max_by_key(|(common, _)| *common)
     }
     pub fn cached_logits(&self) -> Option<Rc<Vec<f32>>> {
         self.last_logits.clone()
@@ -311,6 +351,9 @@ impl Model {
             .is_some_and(|c| c.valid && c.tokens == self.tokens)
         {
             return Ok(());
+        }
+        if self.checkpoint.as_ref().is_some_and(|c| c.valid) {
+            std::mem::swap(&mut self.checkpoint, &mut self.previous_checkpoint);
         }
         if self.checkpoint.is_none() {
             let recurrent = self
@@ -530,10 +573,10 @@ impl Model {
 }
 
 /// Share weight expansion across prompt tokens, limiting Attention scratch to
-/// 32 MiB where possible. At least one token must fit even for large contexts.
+/// 64 MiB where possible. At least one token must fit even for large contexts.
 fn prefill_batch_for_position(maximum: usize, position: usize, heads: usize) -> usize {
     let mut batch = maximum;
-    while batch > 1 && (position + batch) * heads * batch * 4 > 32 * 1024 * 1024 {
+    while batch > 1 && (position + batch) * heads * batch * 4 > 64 * 1024 * 1024 {
         batch /= 2;
     }
     batch
@@ -548,7 +591,8 @@ mod tests {
         // The production 27B model has 24 query heads. A fixed 128-token
         // batch at its context limit would need about 1.5 GiB for scores alone.
         assert_eq!(prefill_batch_for_position(128, 1378, 24), 128);
-        assert_eq!(prefill_batch_for_position(128, 131_072 - 128, 24), 2);
+        assert_eq!(prefill_batch_for_position(256, 42_429, 24), 16);
+        assert_eq!(prefill_batch_for_position(128, 131_072 - 128, 24), 4);
         assert_eq!(prefill_batch_for_position(8, 1378, 24), 8);
     }
 }

@@ -199,10 +199,12 @@ impl Gpu {
             "prepare_qk",
             "store_kv",
             "attention_scores",
+            "attention_scores_prefill",
             "attention_scores_decode",
             "attention_output",
             "attention_softmax",
             "attention_value_tiles",
+            "attention_value_tiles_prefill",
             "attention_reduce_tiles",
         ] {
             let c_name = CString::new(name)?;

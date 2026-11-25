@@ -7,6 +7,139 @@ use local_rocm::{
 };
 mod support;
 
+#[test]
+#[ignore = "Requires an AMD GPU and LOCAL_ROCM_BIN; long synthetic KV"]
+fn long_batched_attention_matches_cpu_for_grouped_heads_and_mask() -> Result<()> {
+    let gpu = gpu()?;
+    let shape = AttentionShape {
+        heads: 4,
+        kv_heads: 2,
+        head_dim: 256,
+        rotary_dim: 64,
+        rope_base: 10000.0,
+        eps: 1e-6,
+    };
+    let position = 8193;
+    let batch = 3;
+    let capacity = position + batch;
+    let key_value = |p: usize, h: usize| {
+        half::f16::from_f32(((p % 13) as f32 - 6.0) * 0.02 + h as f32 * 0.03).to_f32()
+    };
+    let val_value = |p: usize, h: usize| {
+        half::f16::from_f32(((p % 17) as f32 - 8.0) * 0.03 + h as f32 * 0.05).to_f32()
+    };
+    let mut key_bytes = Vec::with_capacity(capacity * 512 * 2);
+    let mut value_bytes = Vec::with_capacity(capacity * 512 * 2);
+    for p in 0..capacity {
+        for h in 0..2 {
+            for _ in 0..256 {
+                key_bytes.extend_from_slice(
+                    &half::f16::from_f32(key_value(p, h)).to_bits().to_le_bytes(),
+                );
+                value_bytes.extend_from_slice(
+                    &half::f16::from_f32(val_value(p, h)).to_bits().to_le_bytes(),
+                );
+            }
+        }
+    }
+    let keys = gpu.upload(&key_bytes)?;
+    let values = gpu.upload(&value_bytes)?;
+    let q_values: Vec<f32> = (0..batch)
+        .flat_map(|_| (0..4).flat_map(|h| vec![0.08 + h as f32 * 0.03; 256]))
+        .collect();
+    let q = gpu.upload_f32(&q_values)?;
+    let gate = gpu.upload_f32(&vec![0.0; batch * 4 * 256])?;
+    let k: Vec<f32> = (position..capacity)
+        .flat_map(|p| (0..2).flat_map(move |h| vec![key_value(p, h); 256]))
+        .collect();
+    let v: Vec<f32> = (position..capacity)
+        .flat_map(|p| (0..2).flat_map(move |h| vec![val_value(p, h); 256]))
+        .collect();
+    let output = gpu
+        .attention(
+            &q,
+            &gate,
+            &gpu.upload_f32(&k)?,
+            &gpu.upload_f32(&v)?,
+            &keys,
+            &values,
+            position,
+            capacity,
+            shape,
+        )?
+        .read_f32()?;
+    for row in 0..batch {
+        for head in 0..4 {
+            let kh = head / 2;
+            let q = (0.08 + head as f32 * 0.03) as f64;
+            let mut sum = 0.0;
+            let mut weighted = 0.0;
+            for p in 0..=position + row {
+                let weight = (16.0 * q * key_value(p, kh) as f64).exp();
+                sum += weight;
+                weighted += weight * val_value(p, kh) as f64;
+            }
+            let expected = 0.5 * weighted / sum;
+            assert!((output[(row * 4 + head) * 256] as f64 - expected).abs() < 1e-5);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "Requires an AMD GPU and LOCAL_ROCM_BIN; long-context attention benchmark"]
+fn long_prefill_attention_scratch_reuse() -> Result<()> {
+    use std::time::Instant;
+    let gpu = gpu()?;
+    let shape = AttentionShape {
+        heads: 24,
+        kv_heads: 2,
+        head_dim: 256,
+        rotary_dim: 64,
+        rope_base: 10000.0,
+        eps: 1e-6,
+    };
+    let position = 42_429;
+    let batch = 16;
+    let capacity = position + batch;
+    let keys = gpu.allocate(capacity * shape.kv_heads * shape.head_dim * 2)?;
+    let values = gpu.allocate(capacity * shape.kv_heads * shape.head_dim * 2)?;
+    gpu.clear(&keys)?;
+    gpu.clear(&values)?;
+    let q = gpu.upload_f32(&vec![0.1; batch * shape.heads * shape.head_dim])?;
+    let gate = gpu.upload_f32(&vec![0.0; batch * shape.heads * shape.head_dim])?;
+    let k = gpu.upload_f32(&vec![0.2; batch * shape.kv_heads * shape.head_dim])?;
+    let v = gpu.upload_f32(&vec![1.0; batch * shape.kv_heads * shape.head_dim])?;
+    gpu.synchronize()?;
+    let start = Instant::now();
+    let mut last = None;
+    let mut after_first = 0;
+    for index in 0..8 {
+        last = Some(gpu.attention(&q, &gate, &k, &v, &keys, &values, position, capacity, shape)?);
+        if index == 0 {
+            after_first = gpu.allocation_stats().0;
+        }
+    }
+    gpu.synchronize()?;
+    eprintln!(
+        "long prefill attention: {:.3}s / allocation stats {:?}",
+        start.elapsed().as_secs_f64(),
+        gpu.allocation_stats()
+    );
+    assert!(
+        gpu.allocation_stats().0 <= after_first + 1,
+        "large scratch allocation was not reused"
+    );
+    let output = last.unwrap().read_f32()?;
+    let score = 256.0f64 * 0.1 * half::f16::from_f32(0.2).to_f64() / 16.0;
+    for query in [0, 7, 15] {
+        let count = (query + 1) as f64;
+        let expected = 0.5 * count * score.exp() / (position as f64 + count * score.exp());
+        assert!((output[query * shape.heads * shape.head_dim] as f64 - expected).abs() < 1e-6);
+    }
+    Ok(())
+}
+
 fn gpu() -> Result<Gpu> {
     Gpu::open(std::path::Path::new(&std::env::var("LOCAL_ROCM_BIN")?), 0)
 }
@@ -272,6 +405,42 @@ fn growing_attention_scratch_does_not_exhaust_pool_size_classes() -> Result<()> 
     assert!(
         cached < 4 * 1024 * 1024,
         "obsolete scratch sizes consumed {cached} bytes"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "Requires an AMD GPU and LOCAL_ROCM_BIN; tiny synthetic weights only"]
+fn previous_checkpoint_reuses_unchanged_history_after_edit() -> Result<()> {
+    use local_rocm::model::Model;
+    let fixture = support::ToyModel::create()?;
+    let file = fixture.open()?;
+    let sdk = std::env::var("LOCAL_ROCM_BIN")?;
+    let mut model = Model::load(&file, std::path::Path::new(&sdk), 64)?;
+    for token in [1, 2, 3] {
+        model.forward(token, false)?;
+    }
+    model.save_checkpoint()?;
+    for token in [4, 5] {
+        model.forward(token, false)?;
+    }
+    model.save_checkpoint()?;
+    model.forward(6, true)?;
+    let edited = [1, 2, 3, 7, 6];
+    assert_eq!(model.prepare_prompt(&edited)?, 3);
+    model.forward(7, false)?;
+    let reused = model.forward(6, true)?.unwrap();
+    // The newer checkpoint's KV prefix was overwritten by the edited branch.
+    assert_eq!(model.prepare_prompt(&[1, 2, 3, 4, 5, 6])?, 3);
+    model.reset()?;
+    for (index, token) in edited.into_iter().enumerate() {
+        model.forward(token, index == edited.len() - 1)?;
+    }
+    let full = model.cached_logits().unwrap();
+    close(
+        &reused,
+        &full.iter().map(|&v| v as f64).collect::<Vec<_>>(),
+        1e-5,
     );
     Ok(())
 }

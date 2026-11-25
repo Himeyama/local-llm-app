@@ -312,6 +312,22 @@ extern "C" __global__ void attention_scores(const float* q,const _Float16* kc,fl
     for (unsigned j = 0; j < 256; j++) sum += q[h * 256 + j] * kc[((unsigned long long)p * kv_heads + kh) * 256 + j];
     scores[i] = sum / 16.0f;
 }
+// Each wave segment reads one key vector contiguously for batched prefill.
+extern "C" __global__ void attention_scores_prefill(const float* q,const _Float16* kc,float* scores,unsigned length,unsigned heads,unsigned kv_heads,unsigned batch,unsigned position) {
+    unsigned lane = threadIdx.x % 32;
+    unsigned i = blockIdx.x * (blockDim.x / 32) + threadIdx.x / 32;
+    if (i >= length * heads * batch) return;
+    unsigned h = i / length, p = i % length, kh = (h % heads) / (heads / kv_heads);
+    if (p > position + h / heads) {
+        if (lane == 0) scores[i] = -__builtin_inff();
+        return;
+    }
+    float sum = 0;
+    for (unsigned j = lane; j < 256; j += 32)
+        sum += q[h * 256 + j] * kc[((unsigned long long)p * kv_heads + kh) * 256 + j];
+    for (unsigned step = 16; step; step /= 2) sum += __shfl_down(sum, step, 32);
+    if (lane == 0) scores[i] = sum / 16.0f;
+}
 // For decode, adjacent lanes cooperate on one dot product. This makes the
 // FP16 key loads contiguous instead of striding by an entire KV vector.
 extern "C" __global__ void attention_scores_decode(const float* q,const _Float16* kc,float* scores,unsigned length,unsigned heads,unsigned kv_heads) {
@@ -398,6 +414,16 @@ extern "C" __global__ void attention_value_tiles(const float* scores,const _Floa
     if (end > length) end = length;
     for (unsigned p = tile * 128; p < end; p++) sum += scores[h * length + p] * vc[((unsigned long long)p * kv_heads + kh) * 256 + d];
     partial[(h * tiles + tile) * 256 + d] = sum;
+}
+extern "C" __global__ void attention_value_tiles_prefill(const float* scores,const _Float16* vc,float* partial,unsigned length,unsigned heads,unsigned kv_heads,unsigned batch,unsigned tiles) {
+    unsigned total_heads = heads * batch;
+    unsigned tile = blockIdx.x / total_heads, h = blockIdx.x % total_heads, d = threadIdx.x;
+    unsigned kh = (h % heads) / (heads / kv_heads);
+    float sum = 0;
+    unsigned end = (tile + 1) * 512;
+    if (end > length) end = length;
+    for (unsigned p = tile * 512; p < end; p++) sum += scores[(unsigned long long)h * length + p] * vc[((unsigned long long)p * kv_heads + kh) * 256 + d];
+    partial[((unsigned long long)h * tiles + tile) * 256 + d] = sum;
 }
 extern "C" __global__ void attention_reduce_tiles(const float* partial,const float* gate,float* y,unsigned heads,unsigned tiles) {
     unsigned i = blockIdx.x * blockDim.x + threadIdx.x;

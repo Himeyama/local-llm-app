@@ -13,7 +13,7 @@
 | F32 / F16 / BF16 / Q8_0 / Q4_K / Q5_K / Q6_K | CPU 参照計算と HIP 実機テストあり |
 | Gated DeltaNet / Attention / RoPE / SwiGLU | 独立した HIP カーネル。GGUF の tiled head 順序に対応 |
 | KV・履歴キャッシュ | FP16 KV と再帰状態のチェックポイント。同じトークン列の履歴を再利用し、分岐・変更時は復元またはリセット |
-| 入力 prefill | rocBLAS では最大256トークン。量子化重みの行列積は FP16 入力・FP32 累積。長い会話では作業領域に合わせて縮小。BLAS 未配置時は最大8トークン |
+| 入力 prefill | rocBLAS では最大256トークン。量子化重みの行列積は FP16 入力・FP32 累積。長い会話では Attention スコア用領域の目標 64 MiB に合わせて縮小（1トークンの場合を除く）。BLAS 未配置時は最大8トークン |
 | GPU 一時メモリ | 最大128 MiBのプール。演算ごとの確保・解放と不要なゼロ初期化を省略 |
 | `/health`, `/props`, `/v1/models` | 対応 |
 | `/v1/chat/completions` | 通常 JSON と SSE、usage、reasoning_content、function tools |

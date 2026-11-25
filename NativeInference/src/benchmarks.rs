@@ -113,11 +113,25 @@ pub fn model_run(path: &Path, sdk: &Path, decode_evaluations: usize) -> Result<(
     use crate::{gguf::Gguf, model::Model, tokenizer::Tokenizer};
     let file = Gguf::open(path)?;
     let tokenizer = Tokenizer::from_gguf(&file)?;
+    let prompt_tokens = std::env::var("LOCAL_ROCM_BENCH_PROMPT_TOKENS")
+        .ok()
+        .map(|s| s.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1356);
+    let profile_at = std::env::var("LOCAL_ROCM_BENCH_PROFILE_AT")
+        .ok()
+        .map(|s| s.parse::<usize>())
+        .transpose()?
+        .unwrap_or(1);
+    if !(3..=131_000).contains(&prompt_tokens) || profile_at >= prompt_tokens {
+        return Err("Invalid benchmark prompt length or profile position".into());
+    }
     let mut tokens = tokenizer.encode(
-        &"This is a fixed performance measurement of the local inference engine. ".repeat(300),
+        &"This is a fixed performance measurement of the local inference engine. "
+            .repeat(prompt_tokens / 4 + 1),
     )?;
-    tokens.truncate(1356);
-    if tokens.len() != 1356 {
+    tokens.truncate(prompt_tokens);
+    if tokens.len() != prompt_tokens {
         return Err("Benchmark prompt is too short".into());
     }
     let mut model = Model::load(&file, sdk, 131072)?;
@@ -127,10 +141,16 @@ pub fn model_run(path: &Path, sdk: &Path, decode_evaluations: usize) -> Result<(
     let mut scores = None;
     let mut prefill_profiled = false;
     while cursor < tokens.len() {
-        let boundary = if cursor < 1354 { 1354 } else { tokens.len() };
+        let checkpoint_at = prompt_tokens - 2;
+        let boundary = if cursor < checkpoint_at {
+            checkpoint_at
+        } else {
+            tokens.len()
+        };
         let end = (cursor + model.prefill_batch_size()).min(boundary);
-        let profile_batch = profile && cursor > 0 && !prefill_profiled;
+        let profile_batch = profile && cursor >= profile_at && !prefill_profiled;
         if profile_batch {
+            eprintln!("GPU profile position {cursor}, batch {}", end - cursor);
             prefill_profiled = true;
             model.begin_profile();
         }
@@ -142,12 +162,12 @@ pub fn model_run(path: &Path, sdk: &Path, decode_evaluations: usize) -> Result<(
             );
         }
         cursor = end;
-        if cursor == 1354 {
+        if cursor == checkpoint_at {
             model.save_checkpoint()?;
         }
-        if cursor % 160 == 0 {
+        if cursor % 1024 == 0 {
             eprintln!(
-                "benchmark prefill: {cursor}/1356 ({:.2}s)",
+                "benchmark prefill: {cursor}/{prompt_tokens} ({:.2}s)",
                 started.elapsed().as_secs_f64()
             );
         }
@@ -186,7 +206,7 @@ pub fn model_run(path: &Path, sdk: &Path, decode_evaluations: usize) -> Result<(
     println!(
         "{}",
         serde_json::to_string_pretty(
-            &serde_json::json!({"prompt_tokens":1356,"prefill_seconds":prefill_seconds,"decode_evaluations":decode_evaluations,"decode_seconds":decode_seconds,"total_seconds":started.elapsed().as_secs_f64(),"allocation_statistics":model.allocation_stats(),"generated_ids":generated})
+            &serde_json::json!({"prompt_tokens":prompt_tokens,"prefill_seconds":prefill_seconds,"decode_evaluations":decode_evaluations,"decode_seconds":decode_seconds,"total_seconds":started.elapsed().as_secs_f64(),"allocation_statistics":model.allocation_stats(),"generated_ids":generated})
         )?
     );
     Ok(())

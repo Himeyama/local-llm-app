@@ -435,6 +435,22 @@ impl Gpu {
                     arg(&mut kv_heads),
                 ],
             )?;
+        } else if position >= 8192 {
+            self.launch(
+                "attention_scores_prefill",
+                (heads * batch * length).div_ceil(8),
+                256,
+                &mut [
+                    arg(&mut q),
+                    arg(&mut kc),
+                    arg(&mut s),
+                    arg(&mut length),
+                    arg(&mut heads),
+                    arg(&mut kv_heads),
+                    arg(&mut batch),
+                    arg(&mut pos),
+                ],
+            )?;
         } else {
             self.launch(
                 "attention_scores",
@@ -454,39 +470,61 @@ impl Gpu {
         }
         let mut g = gate.pointer;
         let mut y = result.pointer;
-        if self.decode_attention_tiling && batch == 1 && length >= 256 {
+        if (self.decode_attention_tiling && batch == 1 && length >= 256)
+            || (batch > 1 && position >= 8192)
+        {
+            let mut total_heads = heads * batch;
             self.launch(
                 "attention_softmax",
-                heads,
+                total_heads,
                 256,
                 &mut [arg(&mut s), arg(&mut length)],
             )?;
-            let mut tiles = length.div_ceil(128);
-            let partial = self.output(shape.heads * tiles as usize * shape.head_dim * 4)?;
+            let mut tiles = length.div_ceil(if batch == 1 { 128 } else { 512 });
+            let partial =
+                self.output(total_heads as usize * tiles as usize * shape.head_dim * 4)?;
             let mut p = partial.pointer;
-            self.launch(
-                "attention_value_tiles",
-                heads * tiles,
-                256,
-                &mut [
-                    arg(&mut s),
-                    arg(&mut vc),
-                    arg(&mut p),
-                    arg(&mut length),
-                    arg(&mut heads),
-                    arg(&mut kv_heads),
-                    arg(&mut tiles),
-                ],
-            )?;
+            if batch == 1 {
+                self.launch(
+                    "attention_value_tiles",
+                    total_heads * tiles,
+                    256,
+                    &mut [
+                        arg(&mut s),
+                        arg(&mut vc),
+                        arg(&mut p),
+                        arg(&mut length),
+                        arg(&mut heads),
+                        arg(&mut kv_heads),
+                        arg(&mut tiles),
+                    ],
+                )?;
+            } else {
+                self.launch(
+                    "attention_value_tiles_prefill",
+                    total_heads * tiles,
+                    256,
+                    &mut [
+                        arg(&mut s),
+                        arg(&mut vc),
+                        arg(&mut p),
+                        arg(&mut length),
+                        arg(&mut heads),
+                        arg(&mut kv_heads),
+                        arg(&mut batch),
+                        arg(&mut tiles),
+                    ],
+                )?;
+            }
             self.launch(
                 "attention_reduce_tiles",
-                heads,
+                total_heads,
                 256,
                 &mut [
                     arg(&mut p),
                     arg(&mut g),
                     arg(&mut y),
-                    arg(&mut heads),
+                    arg(&mut total_heads),
                     arg(&mut tiles),
                 ],
             )?;

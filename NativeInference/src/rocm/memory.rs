@@ -11,7 +11,7 @@ use std::{
 };
 
 const MAX_CACHED_BYTES: usize = 128 * 1024 * 1024;
-const MAX_CACHED_ALLOCATION: usize = 32 * 1024 * 1024;
+const MAX_CACHED_ALLOCATION: usize = 64 * 1024 * 1024;
 const ALIGNMENT: usize = 4096;
 
 pub(super) struct Pool {

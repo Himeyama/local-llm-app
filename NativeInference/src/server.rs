@@ -238,7 +238,15 @@ fn generate(model: &mut Model, tokenizer: &Tokenizer, alias: &str, job: &mut Job
         .count();
     let tokenize_seconds = started.elapsed().as_secs_f64();
     let prefill_started = Instant::now();
+    let overlap = model.checkpoint_overlap(&ids);
     let reused = model.prepare_prompt(&ids)?;
+    if reused == 0 {
+        if let Some((shared, checkpoint)) = overlap {
+            eprintln!(
+                "cache miss: shared {shared} tokens / nearest checkpoint {checkpoint} tokens"
+            );
+        }
+    }
     eprintln!(
         "prefill: prompt {} tokens / reused {} / remaining {} / tokenize {:.3}s / queue {:.3}s / batch {}",
         ids.len(),
