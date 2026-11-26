@@ -65,9 +65,6 @@ public static class ChatCompaction
             if (message["tool_calls"] is { } calls) transcript.AppendLine(calls.ToJsonString());
         }
         string source = transcript.ToString(), summary = session.Summary;
-        // Summarize bounded chunks, so even an already oversized old history
-        // can be recovered without submitting the oversized context again.
-        int chunkSize = Math.Clamp(maximum / 8, 256, 12000);
         async Task SummarizeAsync(string chunk)
         {
             ct.ThrowIfCancellationRequested();
@@ -79,7 +76,7 @@ public static class ChatCompaction
             try {
                 await client.GenerateAsync(temporary, new ChatTools(session.Workspace, false, false), new CompressionProgress(progress), () => { }, ct, "none", allowTools: false);
             }
-            catch (SummaryLengthException) when (chunk.Length > 512) {
+            catch (IOException exception) when (chunk.Length > 512 && exception is SummaryLengthException or SummaryContextOverflowException) {
                 int middle = chunk.Length / 2;
                 if (char.IsHighSurrogate(chunk[middle - 1])) middle++;
                 await SummarizeAsync(chunk[..middle]);
@@ -90,8 +87,9 @@ public static class ChatCompaction
             if (summary.Length == 0) throw new IOException("自動圧縮の要約が空のため、元の会話を保持しました。");
         }
         for (int offset = 0; offset < source.Length;) {
-            int length = Math.Min(chunkSize, source.Length - offset);
-            if (offset + length < source.Length && char.IsHighSurrogate(source[offset + length - 1])) length--;
+            // Reserve room for generated tokens, prompt overhead, and the latest summary.
+            long tokenBudget = Math.Max(128, maximum - Math.Max(1024, maximum / 4) - 2048 - EstimateText(summary));
+            int length = ChunkLength(source.AsSpan(offset), tokenBudget);
             await SummarizeAsync(source.Substring(offset, length));
             offset += length;
         }
@@ -103,6 +101,19 @@ public static class ChatCompaction
         return true;
     }
 
+    private static int ChunkLength(ReadOnlySpan<char> text, long tokenBudget)
+    {
+        // Use sixths of a token to match the estimates for ASCII and other runes.
+        long remaining = tokenBudget * 6;
+        int length = 0;
+        foreach (Rune rune in text.EnumerateRunes()) {
+            remaining -= rune.IsAscii ? 2 : 9;
+            if (remaining < 0) break;
+            length += rune.Utf16SequenceLength;
+        }
+        return length;
+    }
+
     private sealed class CompressionProgress(IProgress<ChatProgress> progress) : IProgress<ChatProgress>
     {
         public void Report(ChatProgress value) => progress.Report(new("", "会話を自動圧縮しています…"));
@@ -110,3 +121,4 @@ public static class ChatCompaction
 }
 
 internal sealed class SummaryLengthException() : IOException("要約を再試行しても生成上限に達したため、元の会話を保持しました。");
+internal sealed class SummaryContextOverflowException(string message) : IOException(message);

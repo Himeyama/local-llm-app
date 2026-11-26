@@ -1,0 +1,23 @@
+--- a/ggml/src/ggml-cuda/mmvq.cu
++++ b/ggml/src/ggml-cuda/mmvq.cu
+@@ -516,15 +516,18 @@
+         // pressure and lookup table contention at higher thread counts.
+         if (ncols_dst == 1) {
+             switch (type) {
++                // R9700 experiment: trade intra-row parallelism for more
++                // independently scheduled blocks on K-quantized weights.
++                case GGML_TYPE_Q4_K:
++                case GGML_TYPE_Q6_K:
++                    return 4;
+                 case GGML_TYPE_Q4_0:
+                 case GGML_TYPE_Q4_1:
+                 case GGML_TYPE_Q5_0:
+                 case GGML_TYPE_Q5_1:
+                 case GGML_TYPE_Q8_0:
+                 case GGML_TYPE_Q2_K:
+-                case GGML_TYPE_Q4_K:
+                 case GGML_TYPE_Q5_K:
+-                case GGML_TYPE_Q6_K:
+                 case GGML_TYPE_IQ4_NL:
+                 case GGML_TYPE_IQ4_XS:
+                     return 8;

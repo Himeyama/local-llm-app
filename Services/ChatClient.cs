@@ -11,6 +11,7 @@ public sealed class ChatClient(HttpClient client)
     public async Task GenerateAsync(ChatSession session, ChatTools tools, IProgress<ChatProgress> progress, Action save, CancellationToken ct, string reasoningEffort = "xhigh", bool allowTools = true)
     {
         if (reasoningEffort is not ("none" or "low" or "medium" or "xhigh")) throw new ArgumentException("未対応の推論レベルです。");
+        string runtimeEnvironment = allowTools ? await tools.RuntimeEnvironmentAsync(ct) + "\n" : "";
         using var propsResponse = await client.GetAsync("http://127.0.0.1:9931/props", ct);
         propsResponse.EnsureSuccessStatusCode();
         var props = JsonNode.Parse(await propsResponse.Content.ReadAsStringAsync(ct));
@@ -41,9 +42,9 @@ public sealed class ChatClient(HttpClient client)
                 measured = estimate;
             }
             var messages = new JsonArray { new JsonObject { ["role"] = "system", ["content"] =
-                "Complete the task and reply in the user's language. Answer questions directly when context suffices. Keep reasoning proportional to complexity and uncertainty. " +
+                runtimeEnvironment + "Complete the task and reply in the user's language. Answer questions directly when context suffices. Keep reasoning proportional to complexity and uncertainty. " +
                 "Lead with the result. Skip filler, repeated context, and long quotes. Include requested detail, key evidence, and material caveats. " +
-                "Use tools only for missing facts or required actions. Reuse current results, narrow searches and reads, and limit command output to relevant lines. " +
+                "Use tools only for missing facts or required actions. Reuse current results and narrow searches and reads. When command output may be long, filter it or select the relevant range in the command to reduce token use. " +
                 "Batch independent calls and wait for prerequisites. After a failure, adjust using the error. " +
                 "When asked to fix code, investigate only what could change the fix. Once the evidence supports a fix, apply the smallest effective change if edits are permitted. " +
                 "For fixes, continue past diagnosis or planning through verification. Run focused checks and resolve failures caused by the change. " +
@@ -57,6 +58,8 @@ public sealed class ChatClient(HttpClient client)
                 // Reasoning is display metadata, not part of the next model input.
                 apiMessage.Remove("reasoning_content");
                 apiMessage.Remove("incomplete");
+                apiMessage.Remove("display_timestamp");
+                apiMessage.Remove("display_elapsed_seconds");
                 messages.Add(apiMessage);
             }
             if (allowTools && session.Summary.Length > 0 && ChatCompaction.Start(session) == session.Messages.Count)
@@ -72,6 +75,11 @@ public sealed class ChatClient(HttpClient client)
             var request = new JsonObject { ["model"] = model, ["messages"] = messages, ["stream"] = true, ["max_tokens"] = outputBudget };
             if (allowTools) { request["tools"] = tools.Definitions(); request["tool_choice"] = "auto"; }
             request["reasoning_effort"] = lengthRetries > 0 ? "none" : reasoningEffort;
+            // Many chat templates only distinguish thinking on/off; explicitly bound
+            // reasoning for llama-server even when the template ignores effort.
+            if (lengthRetries == 0 && reasoningEffort is "low" or "medium")
+                request["reasoning_budget_tokens"] = reasoningEffort == "low" ? 1536 : 4096;
+            request["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = lengthRetries == 0 && reasoningEffort != "none" };
             request["stream_options"] = new JsonObject { ["include_usage"] = true };
             session.ContextTokens = null;
             using var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://127.0.0.1:9931/v1/chat/completions") { Content = JsonContent.Create(request) }, HttpCompletionOption.ResponseHeadersRead, ct);
@@ -82,7 +90,9 @@ public sealed class ChatClient(HttpClient client)
                     if (ChatCompaction.Boundary(session) <= ChatCompaction.Start(session)) throw new IOException("最新の入力がコンテキスト上限を超えています。添付画像や入力を小さくしてください。会話は保持しています。");
                     recoverContext = true; continue;
                 }
-                throw new IOException($"llama-server: {(int)response.StatusCode}\n" + error);
+                string message = $"llama-server: {(int)response.StatusCode}\n" + error;
+                if (!allowTools && IsContextOverflow(error)) throw new SummaryContextOverflowException(message);
+                throw new IOException(message);
             }
             using var reader = new StreamReader(await response.Content.ReadAsStreamAsync(ct));
             var text = new StringBuilder(); var reasoning = new StringBuilder(); var calls = new SortedDictionary<int, JsonObject>(); bool complete = false;
@@ -136,7 +146,7 @@ public sealed class ChatClient(HttpClient client)
                     stalledGenerations = 0;
                     lastFragment = text.ToString();
                     if (continuation == null) {
-                        continuation = new JsonObject { ["role"] = "assistant", ["content"] = text.ToString(), ["incomplete"] = true };
+                        continuation = new JsonObject { ["role"] = "assistant", ["content"] = text.ToString(), ["incomplete"] = true, ["display_timestamp"] = DateTimeOffset.Now.ToString("O") };
                         if (reasoning.Length > 0) continuation["reasoning_content"] = reasoning.ToString();
                         session.Messages.Add(continuation);
                     }
@@ -153,12 +163,13 @@ public sealed class ChatClient(HttpClient client)
             }
             lengthRetries = 0;
             stalledGenerations = 0; lastFragment = null;
-            var assistant = new JsonObject { ["role"] = "assistant", ["content"] = text.ToString() };
+            var assistant = new JsonObject { ["role"] = "assistant", ["content"] = text.ToString(), ["display_timestamp"] = DateTimeOffset.Now.ToString("O") };
             if (reasoning.Length > 0) assistant["reasoning_content"] = reasoning.ToString();
             if (calls.Count == 0) {
                 if (continuation != null) {
                     continuation["content"] = continuation["content"]!.GetValue<string>() + text;
                     continuation.Remove("incomplete");
+                    continuation["display_timestamp"] = DateTimeOffset.Now.ToString("O");
                     if (reasoning.Length > 0) continuation["reasoning_content"] = (continuation["reasoning_content"]?.GetValue<string>() ?? "") + reasoning;
                 }
                 else session.Messages.Add(assistant);

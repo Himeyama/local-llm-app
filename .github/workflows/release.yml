@@ -27,8 +27,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Update Rust
-        run: rustup update stable --no-self-update
       - name: Validate tag and version
         shell: pwsh
         run: |
@@ -38,8 +36,6 @@ jobs:
           "APP_VERSION=$version" >> $env:GITHUB_ENV
       - name: Install browser dependencies
         run: npm ci --no-audit --no-fund --prefix BrowserSearch
-      - name: Prepare ROCm
-        run: python Packaging/prepare_ci_rocm.py
       - name: Build installer
         run: ./Build-Installer.ps1
       - name: Verify installer

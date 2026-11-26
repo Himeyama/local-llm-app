@@ -188,7 +188,7 @@ public sealed partial class MainWindow
     private void OnToggleChatSection(object sender, RoutedEventArgs args)
     {
         chatSectionExpanded = !chatSectionExpanded;
-        NewChatButton.Visibility = SessionList.Visibility = chatSectionExpanded ? Visibility.Visible : Visibility.Collapsed;
+        SessionList.Visibility = chatSectionExpanded ? Visibility.Visible : Visibility.Collapsed;
         ChatHistoryPanel.RowSpacing = chatSectionExpanded ? 12 : 0;
         ChatSectionChevron.Glyph = chatSectionExpanded ? "\uE70D" : "\uE76C";
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(ChatSectionToggle, chatSectionExpanded ? "チャットを折りたたむ" : "チャットを展開");

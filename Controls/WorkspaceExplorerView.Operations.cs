@@ -175,12 +175,12 @@ public sealed partial class WorkspaceExplorerView
         }
         if (entry.IsDirectory) {
             AddMenu(menu, "新しいファイル", "\uE7C3", () => CreateItemAsync(false, entry.Path));
-            AddMenu(menu, "新しいフォルダー", "\uED41", () => CreateItemAsync(true, entry.Path));
+            AddMenu(menu, "新しいフォルダー", "\uE8B7", () => CreateItemAsync(true, entry.Path));
             menu.Items.Add(new MenuFlyoutSeparator());
         }
         AddMenu(menu, "切り取り", "\uE8C6", () => CopyItemAsync(entry, true), editable, "Ctrl+X");
         AddMenu(menu, "コピー", "\uE8C8", () => CopyItemAsync(entry, false), editable, "Ctrl+C");
-        AddMenu(menu, "貼り付け", "\uE77F", () => PasteAsync(entry), canPaste, "Ctrl+V");
+        AddMenu(menu, "貼り付け", "\uE77F", () => PasteAsync(entry), canPaste, "Ctrl+V", pasteIcon: true);
         menu.Items.Add(new MenuFlyoutSeparator());
         AddMenu(menu, "パスのコピー", "\uE71B", () => CopyPathAsync(entry, false));
         AddMenu(menu, "相対パスのコピー", "\uE71B", () => CopyPathAsync(entry, true));
@@ -192,10 +192,11 @@ public sealed partial class WorkspaceExplorerView
         else menu.ShowAt(tree.ContainerFromNode(node) as FrameworkElement ?? tree);
     }
 
-    private void AddMenu(MenuFlyout menu, string label, string glyph, Func<Task> action, bool enabled = true, string accelerator = "")
+    private void AddMenu(MenuFlyout menu, string label, string glyph, Func<Task> action, bool enabled = true, string accelerator = "", bool pasteIcon = false)
     {
         var item = new MenuFlyoutItem { Text = label, IsEnabled = enabled, KeyboardAcceleratorTextOverride = accelerator,
-            Icon = new FontIcon { FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe MDL2 Assets"), Glyph = glyph } };
+            Icon = new FontIcon { FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Segoe Fluent Icons"), Glyph = glyph } };
+        if (pasteIcon) item.Style = (Style)Resources["PasteMenuItemStyle"];
         item.Click += async (_, _) => await RunCommandAsync(action);
         menu.Items.Add(item);
     }

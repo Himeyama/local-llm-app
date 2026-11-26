@@ -74,24 +74,28 @@
         <ToggleButton Tag="cli" Click="OnMenuClick" ToolTipService.ToolTip="Claude / Codex" AutomationProperties.Name="Claude / Codex"><FontIcon Glyph="&#xE756;"/></ToggleButton>
         <ToggleButton Tag="logs" Click="OnMenuClick" ToolTipService.ToolTip="ログ" AutomationProperties.Name="ログ"><SymbolIcon Symbol="Document"/></ToggleButton>
       </StackPanel>
-      <Grid x:Name="HistoryPane" Grid.Column="1" Width="240" Padding="12,6,12,12" SizeChanged="OnHistoryLayoutChanged">
+      <Grid x:Name="HistoryPane" Grid.Column="1" Width="240" Padding="8,6,8,12" SizeChanged="OnHistoryLayoutChanged">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition x:Name="ChatHistoryRow" Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <local:WorkspaceExplorerView x:Name="ExplorerPane" Height="240" Visibility="Collapsed"/>
         <local:VerticalResizeHandle x:Name="ExplorerResizeHandle" Grid.Row="1" Height="8" Visibility="Collapsed" HandleTemplate="{StaticResource VerticalResizeTemplate}" DragStarted="OnExplorerResizeStarted" DragDelta="OnExplorerResizeDelta" KeyDown="OnExplorerResizeKeyDown" AutomationProperties.Name="エクスプローラーとチャット履歴の高さを調整" ToolTipService.ToolTip="ドラッグして高さを調整"/>
         <Grid x:Name="ChatHistoryPanel" Grid.Row="2" MinHeight="144" RowSpacing="12">
-          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-        <Button x:Name="ChatSectionToggle" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent" BorderThickness="0" Padding="0" MinHeight="32" Click="OnToggleChatSection" AutomationProperties.Name="チャットを折りたたむ">
-          <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="ChatSectionChevron" Glyph="&#xE70D;" FontSize="10"/><TextBlock Text="チャット" FontSize="14" FontWeight="SemiBold"/></StackPanel>
-        </Button>
-        <Button x:Name="NewChatButton" Grid.Row="1" HorizontalAlignment="Stretch" Click="OnNewChat" AutomationProperties.Name="新しいチャット"><StackPanel Orientation="Horizontal" Spacing="10"><SymbolIcon Symbol="Add"/><TextBlock Text="新しいチャット"/></StackPanel></Button>
-        <TreeView x:Name="SessionList" Grid.Row="2" SelectionMode="Single" CanDragItems="False" CanReorderItems="False" ItemInvoked="OnSessionInvoked"/>
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <Button x:Name="ChatSectionToggle" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Background="Transparent" BorderThickness="0" Padding="0" MinHeight="32" Click="OnToggleChatSection" AutomationProperties.Name="チャットを折りたたむ">
+            <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon x:Name="ChatSectionChevron" Glyph="&#xE70D;" FontSize="10"/><TextBlock Text="チャット" FontSize="14" FontWeight="SemiBold"/></StackPanel>
+          </Button>
+          <Button x:Name="NewChatButton" Grid.Column="1" Width="32" Height="32" MinWidth="0" MinHeight="0" Padding="0" Background="Transparent" BorderThickness="0" Click="OnNewChat" ToolTipService.ToolTip="ワークスペースを追加" AutomationProperties.Name="ワークスペースを追加"><FontIcon Glyph="&#xE710;" FontSize="12"/></Button>
+        </Grid>
+        <TreeView x:Name="SessionList" Grid.Row="1" SelectionMode="Single" CanDragItems="False" CanReorderItems="False" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ItemInvoked="OnSessionInvoked">
+          <TreeView.ItemTemplate><DataTemplate><Grid ColumnSpacing="4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Content}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/><Button Grid.Column="1" Margin="0,0,4,0" Visibility="Collapsed" DataContextChanged="OnSessionAddButtonDataContextChanged" Loaded="OnSessionAddButtonLoaded" Click="OnSessionAddButtonClick" Width="28" Height="28" MinWidth="0" MinHeight="0" Padding="0" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="セッションを追加" AutomationProperties.Name="セッションを追加"><FontIcon Glyph="&#xE710;" FontSize="12"/></Button></Grid></DataTemplate></TreeView.ItemTemplate>
+        </TreeView>
 
         </Grid>
         <local:VerticalResizeHandle x:Name="GitResizeHandle" Grid.Row="3" Height="8" Visibility="Collapsed" HandleTemplate="{StaticResource VerticalResizeTemplate}" DragStarted="OnGitResizeStarted" DragDelta="OnGitResizeDelta" KeyDown="OnGitResizeKeyDown" AutomationProperties.Name="チャット履歴と Git の高さを調整" ToolTipService.ToolTip="ドラッグして高さを調整"/>
         <Grid x:Name="GitPanel" Grid.Row="4" Height="320" Visibility="Collapsed" SizeChanged="OnHistoryLayoutChanged"/>
-        <local:HorizontalResizeHandle Grid.RowSpan="5" Width="8" HorizontalAlignment="Right" Margin="0,0,-12,0" HandleTemplate="{StaticResource HorizontalResizeTemplate}" DragStarted="OnHistoryWidthResizeStarted" DragDelta="OnHistoryWidthResizeDelta" KeyDown="OnHistoryWidthResizeKeyDown" AutomationProperties.Name="左側パネルの幅を調整" ToolTipService.ToolTip="ドラッグして左側パネルの幅を調整"/>
+        <local:HorizontalResizeHandle Grid.RowSpan="5" Width="8" HorizontalAlignment="Right" Margin="0,0,-8,0" HandleTemplate="{StaticResource HorizontalResizeTemplate}" DragStarted="OnHistoryWidthResizeStarted" DragDelta="OnHistoryWidthResizeDelta" KeyDown="OnHistoryWidthResizeKeyDown" AutomationProperties.Name="左側パネルの幅を調整" ToolTipService.ToolTip="ドラッグして左側パネルの幅を調整"/>
       </Grid>
-      <Grid x:Name="PageLayout" Grid.Column="2" Padding="24,6,24,20" RowSpacing="16">
+      <Grid x:Name="PageLayout" Grid.Column="2" Padding="0,6,24,20" RowSpacing="16">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <TextBlock x:Name="PageTitle" Text="llama-server" FontSize="28" FontWeight="SemiBold"/>
         <InfoBar x:Name="Notice" Grid.Row="1" IsOpen="False" IsClosable="True"/>

@@ -1,0 +1,146 @@
+{
+  "built-baseline": {
+    "repeat_same": true,
+    "position_182": {
+      "id": 364,
+      "token": " for",
+      "bytes": [
+        32,
+        102,
+        111,
+        114
+      ],
+      "logprob": -1.1835051774978638,
+      "top_logprobs": [
+        {
+          "id": 364,
+          "token": " for",
+          "bytes": [
+            32,
+            102,
+            111,
+            114
+          ],
+          "logprob": -1.1835051774978638
+        },
+        {
+          "id": 318,
+          "token": " (",
+          "bytes": [
+            32,
+            40
+          ],
+          "logprob": -1.2016593217849731
+        },
+        {
+          "id": 1879,
+          "token": " input",
+          "bytes": [
+            32,
+            105,
+            110,
+            112,
+            117,
+            116
+          ],
+          "logprob": -1.5429946184158325
+        },
+        {
+          "id": 11,
+          "token": ",",
+          "bytes": [
+            44
+          ],
+          "logprob": -2.035555839538574
+        },
+        {
+          "id": 321,
+          "token": " and",
+          "bytes": [
+            32,
+            97,
+            110,
+            100
+          ],
+          "logprob": -3.256514549255371
+        }
+      ]
+    }
+  },
+  "wave4": {
+    "repeat_same": true,
+    "position_182": {
+      "id": 318,
+      "token": " (",
+      "bytes": [
+        32,
+        40
+      ],
+      "logprob": -1.1909750699996948,
+      "top_logprobs": [
+        {
+          "id": 318,
+          "token": " (",
+          "bytes": [
+            32,
+            40
+          ],
+          "logprob": -1.1909750699996948
+        },
+        {
+          "id": 364,
+          "token": " for",
+          "bytes": [
+            32,
+            102,
+            111,
+            114
+          ],
+          "logprob": -1.2210310697555542
+        },
+        {
+          "id": 1879,
+          "token": " input",
+          "bytes": [
+            32,
+            105,
+            110,
+            112,
+            117,
+            116
+          ],
+          "logprob": -1.4790266752243042
+        },
+        {
+          "id": 11,
+          "token": ",",
+          "bytes": [
+            44
+          ],
+          "logprob": -2.0893421173095703
+        },
+        {
+          "id": 321,
+          "token": " and",
+          "bytes": [
+            32,
+            97,
+            110,
+            100
+          ],
+          "logprob": -3.2742996215820312
+        }
+      ]
+    }
+  },
+  "single_matmul": {
+    "type": "q4_K",
+    "shape": "m=1023,n=1,k=4096",
+    "elements": 1023,
+    "different": 734,
+    "max_abs_gpu_difference": 7.62939453125e-06,
+    "mean_abs_gpu_difference": 1.664968063637891e-06,
+    "cpu_reference_exact": true,
+    "both_gpu_repeats_exact": true
+  }
+}

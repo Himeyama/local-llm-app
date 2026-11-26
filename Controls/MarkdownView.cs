@@ -31,21 +31,21 @@ public sealed class MarkdownView(Action<Uri> openLink)
                 return Text(heading.Inline, heading.Level switch { 1 => 26, 2 => 22, 3 => 19, _ => 16 }, true);
             case ParagraphBlock paragraph: return Text(paragraph.Inline);
             case CodeBlock code:
-                var content = new TextBlock { Text = code.Lines.ToString(), FontFamily = new FontFamily("Cascadia Code, Consolas"), FontSize = 13,
-                    IsTextSelectionEnabled = true, TextWrapping = TextWrapping.NoWrap };
+                var content = new TextBlock { Text = code.Lines.ToString(), FontFamily = new FontFamily("Cascadia Code, Noto Sans JP"), FontSize = 13,
+                    IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap };
                 var codePanel = new StackPanel { Spacing = 6 };
-                if (code is FencedCodeBlock fenced && !string.IsNullOrWhiteSpace(fenced.Info)) codePanel.Children.Add(new TextBlock { Text = fenced.Info, FontSize = 12, Opacity = 0.65 });
-                codePanel.Children.Add(new ScrollViewer { Content = content, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
+                if (code is FencedCodeBlock fenced && !string.IsNullOrWhiteSpace(fenced.Info)) codePanel.Children.Add(new TextBlock { Text = fenced.Info, FontFamily = new FontFamily("Noto Sans JP"), FontSize = 12, Opacity = 0.65 });
+                codePanel.Children.Add(content);
                 return new Border { Child = codePanel, Background = Surface, CornerRadius = new CornerRadius(8), Padding = new Thickness(12) };
             case QuoteBlock quote:
                 return new Border { Child = RenderContainer(quote), BorderBrush = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"], BorderThickness = new Thickness(3, 0, 0, 0), Padding = new Thickness(12, 4, 0, 4) };
             case ListBlock list:
-                var items = new StackPanel { Spacing = 8 }; int number = int.TryParse(list.OrderedStart, out var start) ? start : 1;
+                var items = new StackPanel { Spacing = 3 }; int number = int.TryParse(list.OrderedStart, out var start) ? start : 1;
                 foreach (var item in list.OfType<ListItemBlock>())
                 {
                     var row = new Grid { ColumnSpacing = 8 };
-                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                    row.Children.Add(new TextBlock { Text = list.IsOrdered ? $"{number++}." : "•", FontSize = 15 });
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    row.Children.Add(new TextBlock { Text = list.IsOrdered ? $"{number++}." : "•", FontFamily = new FontFamily("Noto Sans JP"), FontSize = 15 });
                     var body = RenderContainer(item); Grid.SetColumn(body, 1); row.Children.Add(body); items.Children.Add(row);
                 }
                 return items;
@@ -74,14 +74,14 @@ public sealed class MarkdownView(Action<Uri> openLink)
 
     private StackPanel RenderContainer(ContainerBlock container)
     {
-        var panel = new StackPanel { Spacing = 8 };
+        var panel = new StackPanel { Spacing = 4 };
         foreach (var block in container) panel.Children.Add(RenderBlock(block));
         return panel;
     }
 
     private RichTextBlock Text(ContainerInline? source, double fontSize = 15, bool bold = false)
     {
-        var view = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = fontSize };
+        var view = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontFamily = new FontFamily("Noto Sans JP"), FontSize = fontSize };
         if (bold) view.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
         var paragraph = new Paragraph();
         if (source != null) foreach (var inline in source) paragraph.Inlines.Add(RenderInline(inline));
@@ -94,7 +94,7 @@ public sealed class MarkdownView(Action<Uri> openLink)
         {
             case LiteralInline literal: return new Run { Text = literal.Content.ToString() };
             case LineBreakInline: return new LineBreak();
-            case CodeInline code: return new Run { Text = code.Content, FontFamily = new FontFamily("Cascadia Code, Consolas"), FontSize = 13 };
+            case CodeInline code: return new Run { Text = code.Content, FontFamily = new FontFamily("Cascadia Code, Noto Sans JP"), FontSize = 13 };
             case EmphasisInline emphasis:
                 Span styled = emphasis.DelimiterChar == '~' ? new Span { TextDecorations = Windows.UI.Text.TextDecorations.Strikethrough }
                     : emphasis.DelimiterCount >= 2 ? new Bold() : new Italic();

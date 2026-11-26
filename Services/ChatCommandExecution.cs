@@ -8,6 +8,51 @@ namespace LocalLlm.Gui.Services;
 
 internal static class ChatCommandExecution
 {
+    public static async Task<string> RuntimeEnvironmentAsync(bool commandsEnabled, CancellationToken ct)
+    {
+        var checks = await Task.WhenAll(
+            ProbeAsync("python", new[] { "--version" }, ct),
+            ProbeAsync("node", new[] { "--version" }, ct),
+            ProbeAsync(ProcessRunner.PowerShell, new[] { "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()" }, ct));
+        return "Runtime availability (checked at request time; unavailable means the version check failed): " +
+            $"Python: {checks[0]}; Node.js: {checks[1]}; Windows PowerShell: {checks[2]}. " +
+            (commandsEnabled
+                ? "execute_command runs PowerShell and can invoke available Python or Node.js. When file changes are requested, use edit_file, write_file, or suitable scripts via execute_command. Commands do not receive the file tools' automatic backups or restrictions."
+                : "execute_command is disabled; do not assume these runtimes can be invoked through tools.");
+    }
+
+    private static async Task<string> ProbeAsync(string executable, string[] arguments, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var argument in arguments) info.ArgumentList.Add(argument);
+        try
+        {
+            using var process = new Process { StartInfo = info };
+            process.Start();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(3));
+            var stdout = CaptureAsync(process.StandardOutput, timeout.Token);
+            var stderr = CaptureAsync(process.StandardError, timeout.Token);
+            try { await process.WaitForExitAsync(timeout.Token); }
+            catch (OperationCanceledException) {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
+                await process.WaitForExitAsync();
+                await Task.WhenAll(stdout, stderr);
+                ct.ThrowIfCancellationRequested();
+                return "unavailable";
+            }
+            var output = (await stdout).Text.Trim(); var error = (await stderr).Text.Trim();
+            var version = output.Length > 0 ? output : error;
+            if (process.ExitCode != 0 || version.Length == 0) return "unavailable";
+            version = version.Split('\r', '\n')[0];
+            return "available (" + version[..Math.Min(version.Length, 120)] + ")";
+        }
+        catch (System.ComponentModel.Win32Exception) { return "unavailable"; }
+        catch (IOException) { return "unavailable"; }
+    }
+
     public static string FormatForDisplay(string result)
     {
         try

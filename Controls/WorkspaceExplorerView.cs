@@ -1,7 +1,9 @@
 using LocalLlm.Gui.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.System;
 
 namespace LocalLlm.Gui.Controls;
@@ -33,6 +35,51 @@ public sealed partial class WorkspaceExplorerView : Grid
         };
         tree.ContextRequested += OnContextRequested;
         tree.PreviewKeyDown += OnKeyDown;
+    }
+
+    private void OnWorkspaceNodeLoaded(object sender, RoutedEventArgs args)
+    {
+        // Keep WinUI's item template and adjust the two spacing values it doesn't expose.
+        Grid? itemLayout = null;
+        for (DependencyObject? parent = VisualTreeHelper.GetParent((Grid)sender);
+             parent is not null;
+             parent = VisualTreeHelper.GetParent(parent))
+        {
+            if (parent is Grid { Name: "MultiSelectGrid" } grid) itemLayout = grid;
+            if (parent is not TreeViewItem item) continue;
+            if (itemLayout is null) return;
+
+            itemLayout.SetBinding(Grid.PaddingProperty, new Binding
+            {
+                Source = item,
+                Path = new PropertyPath("TreeViewItemTemplateSettings.Indentation"),
+                Converter = compactIndentation
+            });
+
+            foreach (UIElement child in itemLayout.Children)
+            {
+                if (child is Grid { Name: "ExpandCollapseChevron" } chevron)
+                {
+                    Thickness padding = chevron.Padding;
+                    chevron.Padding = new Thickness(padding.Left, padding.Top, 6, padding.Bottom);
+                    break;
+                }
+            }
+            return;
+        }
+    }
+
+    static readonly CompactIndentationConverter compactIndentation = new();
+
+    sealed class CompactIndentationConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, string language) =>
+            value is Thickness indent
+                ? new Thickness(indent.Left * 0.625, indent.Top, indent.Right * 0.625, indent.Bottom)
+                : DependencyProperty.UnsetValue;
+
+        public object ConvertBack(object value, Type targetType, object parameter, string language) =>
+            throw new NotSupportedException();
     }
 
     public void SetWorkspace(string path)

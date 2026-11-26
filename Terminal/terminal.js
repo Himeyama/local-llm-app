@@ -59,7 +59,10 @@
       if (event.ctrlKey && !event.altKey && event.shiftKey && ['KeyC', 'KeyV'].includes(event.code)) {
         event.preventDefault();
         if (event.type === 'keydown') {
-          if (event.code === 'KeyC') send({ type: 'copy', data: terminal.getSelection() });
+          if (event.code === 'KeyC') {
+            const selection = terminal.getSelection();
+            if (selection) { send({ type: 'copy', data: selection }); terminal.clearSelection(); }
+          }
           else send({ type: 'paste', tabId: id });
         }
         return false;
@@ -81,9 +84,13 @@
     if (event.repeat) return;
     send({ type: event.code === 'KeyT' ? 'new-tab' : 'close-tab' });
   }, true);
+  // Match terminal conventions: copy a selection, otherwise paste.
   surface.addEventListener('contextmenu', event => {
     event.preventDefault();
-    if (activeTab) send({ type: 'paste', tabId: activeTab.id });
+    if (!activeTab) return;
+    const selection = activeTab.terminal.getSelection();
+    if (selection) { send({ type: 'copy', data: selection }); activeTab.terminal.clearSelection(); }
+    else send({ type: 'paste', tabId: activeTab.id });
   });
   window.addEventListener('storage', event => {
     if (event.key === fontKey) setFontSize(readFontSize(), false);

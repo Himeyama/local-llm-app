@@ -7,6 +7,7 @@ namespace LocalLlm.Gui.Services;
 
 public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites, string? backupDirectory = null, bool allowCommands = false, Func<JsonObject, CancellationToken, Task<string>>? browserTool = null)
 {
+    public Task<string> RuntimeEnvironmentAsync(CancellationToken ct) => ChatCommandExecution.RuntimeEnvironmentAsync(allowCommands, ct);
     private const int FileLimit = 1024 * 1024;
     private static readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase)
         { ".git", ".venv", ".venv-screenshot", ".uv-cache", "node_modules", "bin", "obj", "models", "wan_models", "runtime", "openwebui", "publish", ".aws", ".ssh" };
@@ -25,7 +26,8 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
         Add("list_directory", "List immediate files and directories without reading their contents. Use path '.' for the workspace root. Returns name, workspace-relative path and type, sorted by name. Protected folders and links are excluded. Returns up to 200 entries; if next_offset is not null, use it as offset to retrieve the next page. Prefer this tool to search_files when inspecting a directory's structure.", ("path", "Workspace-relative directory path, or '.' for the root"));
         tools.Last()!["function"]!["parameters"]!["properties"]!["offset"] = new JsonObject { ["type"] = "integer", ["minimum"] = 0, ["description"] = "Optional zero-based pagination offset; defaults to 0" };
         Add("search_files", "Search file paths and UTF-8 text in the selected workspace. Returns relative paths and matching lines. Empty query lists files recursively; use list_directory for immediate directory contents.", ("query", "Literal text or part of filename"));
-        Add("read_file", "Read a UTF-8 text file in the selected workspace (up to 1 MiB).", ("path", "Relative file path"));
+        Add("read_file", "Read a UTF-8 text file in the selected workspace (up to 1 MiB). Returns the first 50 lines by default and reports truncation. Set read_all to true to read all lines.", ("path", "Relative file path"));
+        tools.Last()!["function"]!["parameters"]!["properties"]!["read_all"] = new JsonObject { ["type"] = "boolean", ["description"] = "Read all lines instead of the first 50; defaults to false" };
         if (allowWrites)
         {
             Add("write_file", "Create or overwrite a UTF-8 text file in the selected workspace. Existing files are backed up in chat-backups before replacement.", ("path", "Relative file path"), ("content", "Complete new contents"));
@@ -33,7 +35,7 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
         }
         if (allowCommands)
         {
-            Add("execute_command", "Run a non-interactive Windows PowerShell command from the selected workspace. Returns stdout, stderr, exit_code and timed_out. Each output stream is limited to 20,000 characters and marked if truncated. Default timeout is 60 seconds; cancellation and timeout stop the process tree. Commands run with the app's user permissions, without a filesystem or network sandbox; file-tool restrictions and backups do not apply. Prefer dedicated tools for simple file/web operations. Do not launch detached background processes or interactive windows.", ("command", "PowerShell command or multiline script, up to 8,000 characters"));
+            Add("execute_command", "Run a non-interactive Windows PowerShell command from the selected workspace, including Python or Node.js scripts and file edits when needed. Returns stdout, stderr, exit_code and timed_out. Each output stream is limited to 20,000 characters and marked if truncated. Default timeout is 60 seconds; cancellation and timeout stop the process tree. Commands run with the app's user permissions, without a filesystem or network sandbox; file-tool restrictions and backups do not apply. Do not launch detached background processes or interactive windows.", ("command", "PowerShell command or multiline script, up to 8,000 characters"));
             var properties = tools.Last()!["function"]!["parameters"]!["properties"]!;
             properties["working_directory"] = new JsonObject { ["type"] = "string", ["description"] = "Optional workspace-relative working directory; defaults to '.'" };
             properties["timeout_seconds"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 1800, ["description"] = "Optional timeout in seconds; defaults to 60" };
@@ -105,6 +107,21 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
         return new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
     }
 
+    private static async Task<string> ReadFile(string path, bool readAll, CancellationToken ct)
+    {
+        var text = await ReadText(path, ct);
+        if (readAll) return text;
+        int lines = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] is not ('\r' or '\n')) continue;
+            if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
+            if (++lines == 50 && i + 1 < text.Length)
+                return text[..(i + 1)] + "\n[50行まで表示しました。残りを読むには read_all: true を指定してください。]";
+        }
+        return text;
+    }
+
     private async Task<string> Search(string query, CancellationToken ct)
     {
         ResolvePath("workspace-check.txt");
@@ -162,6 +179,7 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
 
     public async Task<string> ExecuteAsync(string name, JsonObject args, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         string Get(string key) => args[key]?.GetValue<string>() ?? throw new ArgumentException(key + " が必要です。");
         switch (name)
         {
@@ -172,7 +190,7 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
                 return await ChatCommandExecution.RunAsync(Get("command"), directory, args["timeout_seconds"]?.GetValue<int>() ?? 60, ct);
             case "list_directory": return ListDirectory(Get("path"), args["offset"]?.GetValue<int>() ?? 0, ct);
             case "search_files": return await Search(Get("query"), ct);
-            case "read_file": return await ReadText(ResolvePath(Get("path")), ct);
+            case "read_file": return await ReadFile(ResolvePath(Get("path")), args["read_all"]?.GetValue<bool>() ?? false, ct);
             case "write_file": return await Write(ResolvePath(Get("path")), Get("content"), ct);
             case "edit_file":
                 if (!allowWrites) throw new IOException("ファイル変更が無効です。");

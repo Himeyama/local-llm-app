@@ -1,11 +1,9 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
-using Windows.UI;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace LocalLlm.Gui.Controls;
 
-// Matched fill/outline glyphs share the same font, size, and placement for color layering.
 public sealed class WorkspaceItemIcon : Grid
 {
     public static readonly DependencyProperty IsDirectoryProperty = DependencyProperty.Register(
@@ -23,14 +21,7 @@ public sealed class WorkspaceItemIcon : Grid
     private void Draw()
     {
         Children.Clear();
-        // Segoe MDL2 Assets supplies matching filled/outline pairs for tree folders and pages.
-        AddLayer(IsDirectory ? "\uED42" : "\uE729", IsDirectory ? Color.FromArgb(255, 245, 196, 81) : Color.FromArgb(255, 217, 233, 255));
-        AddLayer(IsDirectory ? "\uED41" : "\uE7C3", IsDirectory ? Color.FromArgb(255, 164, 106, 20) : Color.FromArgb(255, 57, 121, 191));
+        var name = IsDirectory ? "folder_20_filled.svg" : "document_text_20_color.svg";
+        Children.Add(new Image { Source = new SvgImageSource(new Uri($"ms-appx:///Assets/{name}")), Width = 16, Height = 16 });
     }
-
-    private void AddLayer(string glyph, Color color) => Children.Add(new FontIcon {
-        FontFamily = new FontFamily("Segoe MDL2 Assets"), Glyph = glyph,
-        FontSize = 16, Width = 16, Height = 16, IsTextScaleFactorEnabled = false,
-        Foreground = new SolidColorBrush(color)
-    });
 }

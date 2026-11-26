@@ -9,6 +9,7 @@ public sealed class GeminiChatClient(HttpClient client, string url, string authM
     public async Task GenerateAsync(ChatSession session, ChatTools tools, IProgress<ChatProgress> progress, Action save, CancellationToken ct, string reasoningEffort = "xhigh")
     {
         string thinkingLevel = reasoningEffort switch { "none" => "minimal", "low" => "low", "medium" => "medium", "xhigh" => "high", _ => throw new ArgumentException("未対応の推論レベルです。") };
+        var runtimeEnvironment = await tools.RuntimeEnvironmentAsync(ct);
         JsonArray contents = new();
         if (session.Summary.Length > 0) contents.Add(Content("user", new JsonObject { ["text"] = "会話の要約: " + session.Summary }));
         foreach (JsonObject message in session.Messages.Skip(ChatCompaction.Start(session)))
@@ -38,7 +39,7 @@ public sealed class GeminiChatClient(HttpClient client, string url, string authM
         }
         for (int turn = 0; turn < 32; turn++)
         {
-            JsonObject request = new() { ["contents"] = contents.DeepClone(), ["systemInstruction"] = new JsonObject { ["parts"] = new JsonArray { new JsonObject { ["text"] = "Reply in the user's language. Use tools when needed; never pretend to access files. Workspace: " + session.Workspace } } }, ["tools"] = new JsonArray { new JsonObject { ["functionDeclarations"] = declarations.DeepClone() } } };
+            JsonObject request = new() { ["contents"] = contents.DeepClone(), ["systemInstruction"] = new JsonObject { ["parts"] = new JsonArray { new JsonObject { ["text"] = runtimeEnvironment + "\nReply in the user's language. Use tools when needed; never pretend to access files. When command output may be long, filter it or select the relevant range in the command to reduce token use. Workspace: " + session.Workspace } } }, ["tools"] = new JsonArray { new JsonObject { ["functionDeclarations"] = declarations.DeepClone() } } };
             request["generationConfig"] = new JsonObject { ["thinkingConfig"] = new JsonObject { ["thinkingLevel"] = thinkingLevel, ["includeThoughts"] = true } };
             using HttpRequestMessage httpRequest = new(HttpMethod.Post, url) { Content = new StringContent(request.ToJsonString(), Encoding.UTF8, "application/json") };
             switch (authMethod)
@@ -81,7 +82,7 @@ public sealed class GeminiChatClient(HttpClient client, string url, string authM
             JsonArray calls = new();
             foreach (JsonNode? part in modelParts) if (part?["functionCall"] is JsonObject call) calls.Add(call.DeepClone());
             if (calls.Count == 0) {
-                var assistant = new JsonObject { ["role"] = "assistant", ["content"] = answer.ToString() };
+                var assistant = new JsonObject { ["role"] = "assistant", ["content"] = answer.ToString(), ["display_timestamp"] = DateTimeOffset.Now.ToString("O") };
                 if (reasoning.Length > 0) assistant["reasoning_content"] = reasoning.ToString();
                 session.Messages.Add(assistant); save(); progress.Report(new("", "完了")); return;
             }
@@ -90,15 +91,16 @@ public sealed class GeminiChatClient(HttpClient client, string url, string authM
             foreach (JsonNode? call in calls) {
                 string name = call!["name"]?.GetValue<string>() ?? ""; JsonObject arguments = call["args"] as JsonObject ?? new(); string id = Guid.NewGuid().ToString("N");
                 progress.Report(new(answer.ToString(), "実行中: " + name, session.ContextTokens, reasoning.ToString()));
-                string result; try { result = await tools.ExecuteAsync(name, arguments, ct); } catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; } catch (Exception ex) { result = "ツール失敗: " + ex.Message; }
+                string result; try { result = await tools.ExecuteAsync(name, arguments, ct); } catch (OperationCanceledException) when (ct.IsCancellationRequested) { result = "ツールは中断されました。"; } catch (Exception ex) { result = "ツール失敗: " + ex.Message; }
                 storedCalls.Add(new JsonObject { ["id"] = id, ["type"] = "function", ["function"] = new JsonObject { ["name"] = name, ["arguments"] = arguments.ToJsonString() } });
                 results.Add(new JsonObject { ["functionResponse"] = new JsonObject { ["name"] = name, ["response"] = new JsonObject { ["result"] = result } } });
                 session.Messages.Add(new JsonObject { ["role"] = "tool", ["name"] = name, ["tool_call_id"] = id, ["content"] = result });
             }
-            var toolAssistant = new JsonObject { ["role"] = "assistant", ["content"] = answer.ToString(), ["tool_calls"] = storedCalls };
+            var toolAssistant = new JsonObject { ["role"] = "assistant", ["content"] = answer.ToString(), ["tool_calls"] = storedCalls, ["display_timestamp"] = DateTimeOffset.Now.ToString("O") };
             if (reasoning.Length > 0) toolAssistant["reasoning_content"] = reasoning.ToString();
             session.Messages.Insert(session.Messages.Count - calls.Count, toolAssistant);
             save(); contents.Add(new JsonObject { ["role"] = "user", ["parts"] = results });
+            ct.ThrowIfCancellationRequested();
         }
         throw new IOException("Gemini のツール呼び出しが上限に達しました。会話は保持しています。");
     }

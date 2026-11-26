@@ -93,35 +93,6 @@ def prepare_node(destination):
             (destination / name).write_bytes(package.read(prefix + name))
 
 
-def rust_licenses(cargo, destination):
-    metadata = json.loads(subprocess.check_output([str(cargo), "metadata", "--locked", "--format-version", "1",
-                                                  "--manifest-path", str(ROOT / "NativeInference/Cargo.toml")]))
-    inventory = []
-    for package in metadata["packages"]:
-        if package["name"] == "local-rocm":
-            continue
-        folder = Path(package["manifest_path"]).parent
-        target = destination / f"{package['name']}-{package['version']}"
-        licenses = {item for pattern in ["LICENSE*", "COPYING*", "NOTICE*", "COPYRIGHT*"] for item in folder.glob(pattern) if item.is_file()}
-        if package.get("license_file"):
-            licenses.add(folder / package["license_file"])
-        target.mkdir(parents=True, exist_ok=True)
-        for item in sorted(licenses):
-            shutil.copy2(item, target / item.name)
-        inventory.append({"name": package["name"], "version": package["version"], "license": package.get("license")})
-    (destination / "inventory.json").write_text(json.dumps(inventory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    rustc = Path(cargo).with_name("rustc.exe")
-    sysroot = Path(subprocess.check_output([str(rustc), "--print", "sysroot"], text=True).strip())
-    documents = sysroot / "share/doc/rust"
-    if (documents / "licenses").is_dir():
-        copy_tree(documents / "licenses", destination / "standard-library/licenses")
-    for notice in documents.glob("COPYRIGHT*"):
-        if notice.is_file():
-            target = destination / "standard-library" / notice.name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(notice, target)
-
-
 def dotnet_licenses(destination):
     assets = json.loads((ROOT / "obj/project.assets.json").read_text(encoding="utf-8"))
     for name, library in assets["libraries"].items():
@@ -137,51 +108,40 @@ def dotnet_licenses(destination):
                 shutil.copy2(item, target)
 
 
-def stage_payload(version, rocm, skip_build):
-    rocm = rocm.resolve(strict=True)
-    if not (rocm / "bin/amdhip64_7.dll").is_file():
-        raise FileNotFoundError("ROCm 7 SDK のルートを指定してください。")
-    cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo.exe")
-    if not skip_build:
-        run([cargo, "build", "--locked", "--release", "--manifest-path", ROOT / "NativeInference/Cargo.toml"])
+def stage_payload(version):
     stage = OUTPUT / ("payload-" + datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6])
     app = stage / "app"
     app.mkdir(parents=True)
     run(["dotnet", "publish", ROOT / "LocalLlm.Gui.csproj", "-c", "Release", "-r", "win-x64", "--self-contained", "true",
          "-p:PublishSingleFile=false", "-p:PublishTrimmed=false", f"-p:Version={version}", "-o", app])
-    native = app / "runtime/native/local-rocm.exe"
-    native.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / "NativeInference/target/release/local-rocm.exe", native)
-    print("ROCm / rocBLAS を配置しています…", flush=True)
-    # HIPRTC uses COMGR in bin and device resources in lib. External clang,
-    # flang and linker command-line tools are development tools, not runtime.
-    copy_tree(rocm.resolve(strict=True), app / "runtime/rocm", exclude=(Path("lib/llvm/bin"),))
     prepare_node(app / "runtime/node")
-    copy_tree(PACKAGING / "licenses", app / "licenses")
-    rust_licenses(cargo, app / "licenses/rust")
     dotnet_licenses(app / "licenses/dotnet")
     shutil.copy2(PACKAGING / "利用方法.txt", app / "利用方法.txt")
     (app / "local-llm.install.json").write_text(json.dumps({
         "application": "LocalLlmGui", "version": version, "hsis_version": LOCK["hsis"]["version"],
-        "default_server": r"runtime\native\local-rocm.exe", "models_included": False,
+        "default_server": r"runtime\native\local-rocm.exe", "server_included": False, "models_included": False,
         "node_version": LOCK["node"]["version"]}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     required = ["LocalLlm.Gui.exe", "LocalLlm.Gui.pri", "App.xbf", "MainWindow.xbf", "Controls/WorkspaceExplorerView.xbf",
-                "Start-LlamaServer.ps1", "Start-RocmServer.ps1", "runtime/native/local-rocm.exe",
-                "runtime/rocm/bin/amdhip64_7.dll", "runtime/rocm/bin/hiprtc0702.dll", "runtime/rocm/bin/hiprtc-builtins0702.dll",
-                "runtime/rocm/blas/bin/rocblas.dll", "runtime/rocm/blas/bin/libhipblaslt.dll", "runtime/node/node.exe",
+                "Start-LlamaServer.ps1", "Start-RocmServer.ps1", "runtime/node/node.exe",
                 "BrowserSearch/search.mjs", "BrowserSearch/node_modules/@playwright/mcp/package.json", "Editor/index.html"]
     for name in required:
         if not (app / name).is_file():
             raise FileNotFoundError(f"配布に必要なファイルがありません: {name}")
     files = sorted(item for item in app.rglob("*") if item.is_file())
-    if any(item.suffix.lower() == ".gguf" for item in files) or (app / "runtime/llama.cpp").exists():
-        raise ValueError("モデルまたは llama.cpp が誤って同梱されています。")
+    validate_exclusions(app)
     print("配布ファイルの SHA-256 を計算しています…", flush=True)
     inventory = [{"path": item.relative_to(app).as_posix(), "size": item.stat().st_size, "sha256": sha256(item)} for item in files]
     (stage / "payload-manifest.json").write_text(json.dumps(inventory, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"PAYLOAD={app}", flush=True)
     print(f"同梱: {len(files)} files / {sum(item['size'] for item in inventory) / 1024**3:.2f} GiB", flush=True)
     return app
+
+
+def validate_exclusions(app):
+    if any(item.suffix.lower() == ".gguf" or item.name.lower() in {"local-rocm.exe", "llama-server.exe"}
+           for item in app.rglob("*") if item.is_file()) or any(
+               (app / path).exists() for path in ("runtime/llama.cpp", "runtime/native", "runtime/rocm")):
+        raise ValueError("モデルまたは推論サーバーが誤って同梱されています。")
 
 
 def create_uninstall_include(app):
@@ -203,9 +163,8 @@ def create_uninstall_include(app):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", default=ET.parse(ROOT / "LocalLlm.Gui.csproj").findtext("./PropertyGroup/Version"))
-    parser.add_argument("--rocm-root", type=Path, default=ROOT / "runtime/rocm")
     parser.add_argument("--hsis-source", type=Path, default=TOOLS / "hsis-v0.11.2")
-    parser.add_argument("--skip-build", action="store_true", help="Reuse Rust/hsis binaries; GUI is still published")
+    parser.add_argument("--skip-build", action="store_true", help="Reuse hsis binary; GUI is still published")
     parser.add_argument("--stage-only", action="store_true")
     parser.add_argument("--payload", type=Path, help="Package an existing staged payload")
     args = parser.parse_args()
@@ -214,12 +173,15 @@ def main():
         raise ValueError("Installer version must match LocalLlm.Gui.csproj")
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version) or any(int(part) > 65535 for part in args.version.split(".")):
         raise ValueError("Version must be MAJOR.MINOR.PATCH, each component <= 65535")
-    app = args.payload.resolve(strict=True) if args.payload else stage_payload(args.version, args.rocm_root, args.skip_build)
+    app = args.payload.resolve(strict=True) if args.payload else stage_payload(args.version)
     if not app.is_relative_to(OUTPUT.resolve()) or app.name != "app":
         raise ValueError("パッケージ元は publish/installer 配下の app に限定します。")
     marker = json.loads((app / "local-llm.install.json").read_text(encoding="utf-8"))
     if marker["version"] != args.version:
         raise ValueError("ペイロードのバージョンが一致しません。")
+    if marker.get("server_included") is not False:
+        raise ValueError("推論サーバーを同梱しないペイロードが必要です。")
+    validate_exclusions(app)
     info = {"version": args.version, "payload": str(app), "hsis_version": LOCK["hsis"]["version"]}
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "latest-build.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

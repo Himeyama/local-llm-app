@@ -17,7 +17,7 @@ public sealed class ChatSession
     // Automatic compaction retains the visible transcript, but sends only the
     // summary plus messages after this index to the model.
     public int CompactedMessageCount { get; set; }
-    public override string ToString() => Title;
+    public override string ToString() => string.Join(" ", Title.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries));
 }
 
 public sealed class ChatStore(string directory)

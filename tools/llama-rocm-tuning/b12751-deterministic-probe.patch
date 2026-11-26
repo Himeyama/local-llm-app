@@ -1,0 +1,29 @@
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -87,7 +87,7 @@
+         static const size_t n_threads = std::max<size_t>(1, std::min<size_t>(nels/1024, std::min<size_t>(4, N_THREADS/2)));
+ 
+         auto init_thread = [&](size_t start, size_t end) {
+-            thread_local std::default_random_engine gen(std::random_device{}());
++            std::default_random_engine gen(12345 + start);
+             std::uniform_real_distribution<float> distribution(min, max);
+             for (size_t i = start; i < end; i++) {
+                 data[i] = distribution(gen);
+@@ -1582,6 +1582,17 @@
+ 
+             std::vector<float> f1 = tensor_to_float(t1);
+             std::vector<float> f2 = tensor_to_float(t2);
++
++            if (t1->op == GGML_OP_MUL_MAT) {
++                const char * path = std::getenv("LLAMA_COMPARE_DUMP");
++                if (path) {
++                    FILE * file = std::fopen(path, "wb");
++                    if (!file) { std::abort(); }
++                    std::fwrite(f1.data(), sizeof(float), f1.size(), file);
++                    std::fwrite(f2.data(), sizeof(float), f2.size(), file);
++                    std::fclose(file);
++                }
++            }
+ 
+             for (size_t i = 0; i < f1.size(); i++) {
+                 // check for nans

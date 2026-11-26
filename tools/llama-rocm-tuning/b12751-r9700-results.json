@@ -1,0 +1,102 @@
+[
+  {
+    "file": "b12751-built-baseline-tg.json",
+    "avg_ts": 32.457521,
+    "stddev_ts": 0.107187,
+    "samples_ts": [
+      32.518,
+      32.497,
+      32.5788,
+      32.3746,
+      32.3191
+    ]
+  },
+  {
+    "file": "b12751-wave4-tg.json",
+    "avg_ts": 32.814411,
+    "stddev_ts": 0.054003,
+    "samples_ts": [
+      32.7534,
+      32.8579,
+      32.7926,
+      32.8831,
+      32.785
+    ]
+  },
+  {
+    "file": "b12751-wave4-tg-repeat.json",
+    "avg_ts": 32.762555,
+    "stddev_ts": 0.011814,
+    "samples_ts": [
+      32.7722,
+      32.7696,
+      32.7546,
+      32.7456,
+      32.7707
+    ]
+  },
+  {
+    "file": "b12751-built-baseline-tg-repeat.json",
+    "avg_ts": 32.551235,
+    "stddev_ts": 0.048729,
+    "samples_ts": [
+      32.5664,
+      32.4935,
+      32.5576,
+      32.6205,
+      32.5181
+    ]
+  },
+  {
+    "file": "b12751-wave2-tg.json",
+    "avg_ts": 32.642924,
+    "stddev_ts": 0.104978,
+    "samples_ts": [
+      32.6502,
+      32.735,
+      32.7372,
+      32.6091,
+      32.4832
+    ]
+  },
+  {
+    "file": "b12751-built-baseline-long-sdk10.json",
+    "avg_ts": 31.609439,
+    "stddev_ts": 0.071893,
+    "samples_ts": [
+      31.6362,
+      31.528,
+      31.6641
+    ]
+  },
+  {
+    "file": "b12751-wave4-long-sdk10.json",
+    "avg_ts": 31.75217,
+    "stddev_ts": 0.045448,
+    "samples_ts": [
+      31.7037,
+      31.7938,
+      31.759
+    ]
+  },
+  {
+    "file": "b12751-built-baseline-final-sdk10.json",
+    "avg_ts": 32.725116,
+    "stddev_ts": 0.010505,
+    "samples_ts": [
+      32.7364,
+      32.7235,
+      32.7155
+    ]
+  },
+  {
+    "file": "b12751-final-final-sdk10.json",
+    "avg_ts": 32.779788,
+    "stddev_ts": 0.033166,
+    "samples_ts": [
+      32.8039,
+      32.742,
+      32.7935
+    ]
+  }
+]

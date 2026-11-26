@@ -13,6 +13,7 @@ wan_models/
 .uv-cache/
 
 runtime/
+NativeInference/
 openwebui/
 __pycache__/
 node_modules/

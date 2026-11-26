@@ -4,8 +4,33 @@
       xmlns:local="using:LocalLlm.Gui.Controls"
       xmlns:services="using:LocalLlm.Gui.Services" RowSpacing="6">
   <Grid.Resources>
+    <Style x:Key="PasteMenuItemStyle" TargetType="MenuFlyoutItem">
+      <Setter Property="Template"><Setter.Value>
+        <ControlTemplate TargetType="MenuFlyoutItem">
+          <Border x:Name="Surface" Background="Transparent" CornerRadius="4" Padding="12,8">
+            <VisualStateManager.VisualStateGroups><VisualStateGroup x:Name="CommonStates">
+              <VisualState x:Name="Normal"/>
+              <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="Surface.Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/></VisualState.Setters></VisualState>
+              <VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Surface.Background" Value="{ThemeResource SubtleFillColorTertiaryBrush}"/></VisualState.Setters></VisualState>
+              <VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="Surface.Opacity" Value="0.4"/></VisualState.Setters></VisualState>
+            </VisualStateGroup></VisualStateManager.VisualStateGroups>
+            <Grid ColumnSpacing="12">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <Viewbox Width="16" Height="16">
+                <Canvas Width="16" Height="16">
+                  <Path Data="M 10.5,2 H 12 V 4 M 6,15 H 3 V 2 H 5 M 5,2 C 5,1 6,1 7,1 C 8,1 9,1 9,2 H 10 V 3 H 5 Z" Stroke="{ThemeResource TextFillColorPrimaryBrush}" StrokeThickness="1" StrokeLineJoin="Round"/>
+                  <Path Data="M 8,5 H 14 V 15 H 8 Z" Stroke="{ThemeResource AccentTextFillColorPrimaryBrush}" StrokeThickness="1" StrokeLineJoin="Round"/>
+                </Canvas>
+              </Viewbox>
+              <TextBlock Grid.Column="1" Text="{TemplateBinding Text}" VerticalAlignment="Center"/>
+              <TextBlock Grid.Column="2" Text="{TemplateBinding KeyboardAcceleratorTextOverride}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
+            </Grid>
+          </Border>
+        </ControlTemplate>
+      </Setter.Value></Setter>
+    </Style>
     <DataTemplate x:Key="WorkspaceNodeTemplate" x:DataType="TreeViewNode">
-      <Grid ColumnSpacing="8" Tag="{x:Bind Content}"
+      <Grid ColumnSpacing="8" Tag="{x:Bind Content}" Loaded="OnWorkspaceNodeLoaded"
             ToolTipService.ToolTip="{x:Bind ((services:WorkspaceEntry)Content).Path}"
             AutomationProperties.Name="{x:Bind ((services:WorkspaceEntry)Content).Name}">
         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -49,7 +74,7 @@
       <local:WorkspaceItemIcon IsDirectory="True"/>
     </Button>
     <Button x:Name="RefreshButton" Style="{StaticResource ExplorerRefreshStyle}" ToolTipService.ToolTip="ファイル一覧を更新" AutomationProperties.Name="ファイル一覧を更新">
-      <FontIcon FontFamily="Segoe MDL2 Assets" Glyph="&#xE72C;" FontSize="16"/>
+      <Image Width="16" Height="16"><Image.Source><SvgImageSource UriSource="ms-appx:///Assets/arrow_sync_24_color.svg"/></Image.Source></Image>
     </Button>
     </StackPanel>
   </Grid>

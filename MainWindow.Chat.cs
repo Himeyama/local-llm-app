@@ -60,6 +60,7 @@ public sealed partial class MainWindow
     private int? maximumChatContext;
     private CancellationTokenSource? chatCancellation;
     private TaskCompletionSource? activeChatTurn;
+    private bool interruptChatTurn;
     private bool handlingChatCommand;
     private CancellationTokenSource? chatCommandCancellation;
     private bool selectingSession;
@@ -142,6 +143,9 @@ public sealed partial class MainWindow
                     var configure = new MenuFlyoutItem { Text = "作業ディレクトリを設定", Icon = new SymbolIcon(Symbol.Folder) };
                     configure.Click += async (_, _) => await ConfigureWorkspaceAsync(workspace);
                     menu.Items.Add(configure);
+                    var deleteSessions = new MenuFlyoutItem { Text = "セッションをすべて削除", Icon = new SymbolIcon(Symbol.Delete), IsEnabled = chatSessions.Any(s => s.WorkspaceId == workspace.Id) };
+                    deleteSessions.Click += async (_, _) => await DeleteWorkspaceSessionsAsync(workspace);
+                    menu.Items.Add(deleteSessions);
                     menu.Items.Add(new MenuFlyoutSeparator());
                     var deleteWorkspace = new MenuFlyoutItem { Text = "削除", Icon = new SymbolIcon(Symbol.Delete) };
                     deleteWorkspace.Click += async (_, _) => await DeleteWorkspaceAsync(workspace);
@@ -155,6 +159,57 @@ public sealed partial class MainWindow
                 menu.ShowAt(item); args.Handled = true; return;
             }
             source = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(source);
+        }
+    }
+
+    private void OnSessionAddButtonLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button) button.Visibility = button.DataContext is TreeViewNode { Content: ChatWorkspace } ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnSessionAddButtonDataContextChanged(FrameworkElement sender, DataContextChangedEventArgs e)
+    {
+        sender.Visibility = e.NewValue is TreeViewNode { Content: ChatWorkspace } ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnSessionAddButtonClick(object sender, RoutedEventArgs e)
+    {
+        if (chatCancellation != null || handlingChatCommand) return;
+        if (sender is Button { DataContext: TreeViewNode { Content: ChatWorkspace workspace } }) Execute(() => CreateChat(workspace));
+    }
+
+    private async Task DeleteWorkspaceSessionsAsync(ChatWorkspace workspace)
+    {
+        if (chatCancellation != null || handlingChatCommand || !settings.ChatWorkspaces.Contains(workspace)) return;
+        var members = chatSessions.Where(s => s.WorkspaceId == workspace.Id).ToList();
+        if (members.Count == 0) return;
+        try
+        {
+            var dialog = new ContentDialog { XamlRoot = RootLayout.XamlRoot, Title = "セッションをすべて削除しますか？",
+                Content = new TextBlock { Text = $"「{workspace.Name}」の {members.Count} 件のセッションの会話履歴・添付画像を削除します。作業ディレクトリ内のファイルは保持します。", TextWrapping = TextWrapping.Wrap },
+                PrimaryButtonText = "削除", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Close };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary || closing || chatCancellation != null || handlingChatCommand) return;
+            foreach (var session in members)
+            {
+                chatStore.Delete(session);
+                RemoveConsole(session.Id);
+                chatSessions.Remove(session); drafts.Remove(session.Id); pendingMessages.Remove(session.Id);
+            }
+        }
+        catch (Exception ex) { if (!closing) ShowError("セッションを削除できません: " + ex.Message); }
+        finally
+        {
+            if (!closing)
+            {
+                if (currentChat != null && !chatSessions.Contains(currentChat))
+                {
+                    currentChat = chatSessions.OrderByDescending(s => s.UpdatedAt).FirstOrDefault();
+                    attachments.Clear(); AttachmentList.Children.Clear(); AttachmentList.Visibility = Visibility.Collapsed;
+                    ChatInput.Text = currentChat == null ? "" : drafts.GetValueOrDefault(currentChat.Id, "");
+                    followChat = true; SetChatActivity(""); RenderConversation(); BuildPage();
+                }
+                RefreshSessions();
+            }
         }
     }
 
@@ -336,8 +391,26 @@ public sealed partial class MainWindow
                 if (message["name"]?.GetValue<string>() == "execute_command") result = ChatCommandExecution.FormatForDisplay(result);
                 if (message["name"]?.GetValue<string>() == "web_search") result = ChatBrowserSearch.FormatForDisplay(result);
                 var detail = MessageText(result);
-                var toolLabel = message["name"]?.GetValue<string>() == "web_search" ? "ウェブ検索（web_search）" : message["name"]?.GetValue<string>();
-                ChatMessages.Children.Add(new Expander { Header = "ツール: " + toolLabel, Content = detail, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
+                var toolName = message["name"]?.GetValue<string>() ?? "";
+                (string toolLabel, string toolGlyph) = toolName switch
+                {
+                    "read_file" => ("ファイル読み込み", "\uE8C3"),
+                    "write_file" => ("ファイル書き込み", "\uE70F"),
+                    "execute_command" => ("コマンドを実行しました", "\uE756"),
+                    "web_search" => ("ウェブを検索しました", "\uE756"),
+                    _ => ("ツール: " + toolName, "\uE756")
+                };
+                var toolPanel = new StackPanel { Spacing = 4 };
+                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                header.Children.Add(new FontIcon { Glyph = toolGlyph, FontSize = 14 });
+                header.Children.Add(new TextBlock { Text = toolLabel, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Noto Sans JP") });
+                var chevron = new FontIcon { Glyph = "\uE76C", FontSize = 10 };
+                header.Children.Add(chevron);
+                var toggle = new Button { Content = header, Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0), Padding = new Thickness(0, 4, 0, 4), MinWidth = 0, MinHeight = 0, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], HorizontalAlignment = HorizontalAlignment.Left };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, toolLabel + " の詳細を表示");
+                detail.Visibility = Visibility.Collapsed;
+                toggle.Click += (_, _) => { var expanded = detail.Visibility != Visibility.Visible; detail.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed; chevron.Glyph = expanded ? "\uE70D" : "\uE76C"; Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, toolLabel + (expanded ? " の詳細を閉じる" : " の詳細を表示")); };
+                toolPanel.Children.Add(toggle); toolPanel.Children.Add(detail); ChatMessages.Children.Add(toolPanel);
                 continue;
             }
             var text = "";
@@ -357,8 +430,7 @@ public sealed partial class MainWindow
             if (text.Length == 0 && block.Children.Count == 0) continue;
             if (role == "user")
             {
-                if (text.Length > 0) block.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 15,
-                    Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White) });
+                if (text.Length > 0) block.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 15, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Noto Sans JP") });
                 var bubble = new SquircleBubble(block, (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"])
                     { HorizontalAlignment = HorizontalAlignment.Right, MaxWidth = ChatScroll.ActualWidth > 0 ? ChatScroll.ActualWidth * 0.8 : 520 };
                 ChatMessages.Children.Add(bubble);
@@ -366,6 +438,7 @@ public sealed partial class MainWindow
             else
             {
                 if (text.Length > 0) block.Children.Add(RenderMarkdown(text));
+                if (role == "assistant" && text.Length > 0) block.Children.Add(CreateMessageActions(text, message["display_timestamp"]?.GetValue<string>()));
                 ChatMessages.Children.Add(block);
             }
         }
@@ -374,11 +447,32 @@ public sealed partial class MainWindow
             streamingText = new ContentControl { HorizontalContentAlignment = HorizontalAlignment.Stretch, Content = RenderStreamingProgress() };
             ChatMessages.Children.Add(streamingText);
         }
+        else if (currentChat.Messages.LastOrDefault() is { } last && last["role"]?.GetValue<string>() == "assistant" && last["display_elapsed_seconds"]?.GetValue<long>() is long seconds && seconds >= 0)
+        {
+            ChatMessages.Children.Add(new TextBlock { Text = $"作業時間: {seconds / 60:00}:{seconds % 60:00}", FontSize = 12, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Noto Sans JP"), Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] });
+        }
         ScrollChatToEnd();
     }
 
+    private static UIElement CreateMessageActions(string markdown, string? timestamp)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var copy = new Button { Content = new FontIcon { Glyph = "\uE8C8", FontSize = 14 }, Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0), Padding = new Thickness(4), MinWidth = 0, MinHeight = 0, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] };
+        var copied = new TextBlock { Text = "コピーしました", FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], Visibility = Visibility.Collapsed };
+        var copiedTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        copiedTimer.Tick += (_, _) => { copiedTimer.Stop(); copied.Visibility = Visibility.Collapsed; };
+        row.Unloaded += (_, _) => copiedTimer.Stop();
+        ToolTipService.SetToolTip(copy, "Markdown をコピー");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(copy, "Markdown をコピー");
+        copy.Click += (_, _) => { var data = new Windows.ApplicationModel.DataTransfer.DataPackage(); data.SetText(markdown); Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(data); copied.Visibility = Visibility.Visible; copiedTimer.Stop(); copiedTimer.Start(); };
+        row.Children.Add(copy);
+        row.Children.Add(copied);
+        if (DateTimeOffset.TryParse(timestamp, out var time)) row.Children.Add(new TextBlock { Text = time.ToLocalTime().ToString("HH:mm"), FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] });
+        return row;
+    }
+
     private static TextBlock RenderReasoning(string text) => new() {
-        Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 14,
+        Text = text, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 14, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Noto Sans JP"),
         Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
     };
 
@@ -442,7 +536,7 @@ public sealed partial class MainWindow
 
     private RichTextBlock MessageText(string text)
     {
-        var view = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 15 };
+        var view = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, FontSize = 15, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Code, Noto Sans JP") };
         var paragraph = new Paragraph(); int start = 0;
         foreach (Match match in Regex.Matches(text, @"https?://[^\s<>\""\)\]]+", RegexOptions.None, TimeSpan.FromSeconds(1)))
         {
@@ -628,7 +722,7 @@ public sealed partial class MainWindow
         }
         else { chatSpinnerTimer.Stop(); ChatActivitySpinner.Text = ""; ChatActivitySpinner.Visibility = Visibility.Collapsed; }
     }
-    private void OnStopChat(object sender, RoutedEventArgs e) { chatCommandCancellation?.Cancel(); chatCancellation?.Cancel(); SetChatActivity("停止しています…"); }
+    private void OnStopChat(object sender, RoutedEventArgs e) { interruptChatTurn = false; chatCommandCancellation?.Cancel(); chatCancellation?.Cancel(); SetChatActivity("停止しています…"); }
     private void OnChatInputGotFocus(object sender, RoutedEventArgs e) => ChatComposerOutline.Fill = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
     private void OnChatInputLostFocus(object sender, RoutedEventArgs e) => ChatComposerOutline.Fill = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextControlBorderBrush"];
     private void OnChatKeyDown(object sender, KeyRoutedEventArgs e)
@@ -660,6 +754,12 @@ public sealed partial class MainWindow
             ChatInput.Text = ""; drafts.Remove(session.Id); attachments.Clear(); AttachmentList.Children.Clear(); AttachmentList.Visibility = Visibility.Collapsed;
             RenderPendingMessages();
             ChatInput.Focus(FocusState.Programmatic);
+            if (activeChatTurn != null && chatCancellation != null && !handlingChatCommand && !chatCancellation.IsCancellationRequested)
+            {
+                interruptChatTurn = true;
+                chatCancellation.Cancel();
+                SetChatActivity("新しい指示のために作業を中断しています…");
+            }
         }
         if (chatCancellation != null || handlingChatCommand || (!retry && pending.Count == 0)) return;
         await DrainChatQueueAsync(session, pending, retry);
@@ -695,7 +795,7 @@ public sealed partial class MainWindow
         try
         {
             var active = activeChatTurn;
-            if (command == "clear") chatCancellation?.Cancel();
+            if (command == "clear") { interruptChatTurn = false; chatCancellation?.Cancel(); }
             if (active != null) { SetChatActivity(command == "clear" ? "停止して会話をクリアしています…" : "回答の完了後に会話を圧縮します…"); await active.Task; }
             if (closing) return;
             commandCancellation.Token.ThrowIfCancellationRequested();
@@ -752,6 +852,7 @@ public sealed partial class MainWindow
 
     private async Task<bool> GenerateChatTurnAsync(ChatSession session, JsonObject? message, Queue<JsonObject> pending)
     {
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
         ChatSession? generationSession = null;
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         activeChatTurn = completion;
@@ -800,15 +901,35 @@ public sealed partial class MainWindow
                 ? new GeminiChatClient(chatHttp, url, authMethod, apiKey).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort)
                 : new ChatClient(chatHttp).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort));
             cancellation.Token.ThrowIfCancellationRequested();
+            if (generationSession.Messages.LastOrDefault() is { } answer && answer["role"]?.GetValue<string>() == "assistant")
+            {
+                answer["display_elapsed_seconds"] = (long)elapsed.Elapsed.TotalSeconds;
+                chatStore.Save(generationSession);
+            }
             SetChatActivity("");
             return true;
         }
-        catch (OperationCanceledException) { if (!closing) SetChatActivity("停止しました。保存済みの会話から続けられます。空欄のまま送信すると再試行します。"); }
+        catch (OperationCanceledException)
+        {
+            if (interruptChatTurn && !closing && !handlingChatCommand && generationSession != null)
+            {
+                try
+                {
+                    ChatInterruption.CompleteTranscript(generationSession);
+                    chatStore.Save(generationSession);
+                    SetChatActivity("新しい指示を処理しています…");
+                    return true;
+                }
+                catch (Exception ex) { ShowError(ex.Message); SetChatActivity("会話を保存できませんでした。送信待ちのメッセージは保持しています。"); }
+            }
+            else if (!closing) SetChatActivity("停止しました。保存済みの会話から続けられます。空欄のまま送信すると再試行します。");
+        }
         catch (Exception ex) { if (!closing) { ShowError(ex.Message); SetChatActivity("応答を取得できませんでした。空欄のまま送信すると再試行します。"); } }
         finally
         {
             if (generationSession != null) { session.Messages = generationSession.Messages; session.Summary = generationSession.Summary; session.CompactedMessageCount = generationSession.CompactedMessageCount; session.ContextTokens = generationSession.ContextTokens; session.UpdatedAt = generationSession.UpdatedAt; }
             chatCancellation = null;
+            interruptChatTurn = false;
             streamingProgress = null;
             if (!closing) UpdateChatSpinner();
             if (!closing) { UpdateChatControls(); RenderConversation(); RefreshSessions(); }

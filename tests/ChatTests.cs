@@ -10,6 +10,15 @@ static async Task Reject(Func<Task> action, string message)
     throw new Exception(message);
 }
 static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
+var interruptedTranscript = new ChatSession { Messages = new() { Args("{\"role\":\"user\",\"content\":\"first\"}"), Args("{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call\"}]}"), Args("{\"role\":\"tool\",\"tool_call_id\":\"call\",\"content\":\"done\"}") } };
+ChatInterruption.CompleteTranscript(interruptedTranscript);
+Assert(interruptedTranscript.Messages.Count == 4 && interruptedTranscript.Messages[2]["content"]!.GetValue<string>() == "done" && interruptedTranscript.Messages[3]["role"]!.GetValue<string>() == "assistant", "Interruption must preserve tool results and complete the turn");
+var partialTranscript = new ChatSession { Messages = new() { Args("{\"role\":\"assistant\",\"content\":\"partial\",\"incomplete\":true}") } };
+ChatInterruption.CompleteTranscript(partialTranscript);
+Assert(partialTranscript.Messages.Count == 1 && partialTranscript.Messages[0]["incomplete"] == null && partialTranscript.Messages[0]["content"]!.GetValue<string>().StartsWith("partial"), "Interruption must preserve and close an incomplete answer");
+var finishedTranscript = new ChatSession { Messages = new() { Args("{\"role\":\"assistant\",\"content\":\"finished\"}") } };
+ChatInterruption.CompleteTranscript(finishedTranscript);
+Assert(finishedTranscript.Messages.Count == 1 && finishedTranscript.Messages[0]["content"]!.GetValue<string>() == "finished", "A completed answer must remain unchanged");
 var displayJson = new JsonObject { ["command"] = "first\nsecond", ["stdout"] = "one\r\ntwo\nthree", ["path"] = @"C:\notes\report.txt" }.ToJsonString();
 var displayedResult = ChatCommandExecution.FormatForDisplay(displayJson);
 Assert(displayedResult.Contains("first\nsecond") && displayedResult.Contains("one\r\ntwo\nthree"), "Command display must render LF and CRLF escapes as line breaks");
@@ -39,6 +48,8 @@ try
     var geminiProgress = new CapturingProgress();
     await new GeminiChatClient(new HttpClient(geminiHandler), "http://localhost/custom:stream").GenerateAsync(geminiSession, new ChatTools(root, false, false), geminiProgress, () => { }, default, "medium");
     Assert(geminiHandler.Path == "/custom:stream" && geminiSession.Messages.Last()["content"]!.GetValue<string>() == "こんにちは世界" && geminiSession.ContextTokens == 7, "Gemini custom URL, SSE chunks or usage failed");
+    var geminiSystem = geminiHandler.Request!["systemInstruction"]!["parts"]![0]!["text"]!.GetValue<string>();
+    Assert(geminiSystem.Contains("Python:") && geminiSystem.Contains("Node.js:") && geminiSystem.Contains("Windows PowerShell:") && geminiSystem.Contains("execute_command is disabled"), "Gemini must receive runtime availability and tool state");
     Assert(geminiHandler.ContentLength == geminiHandler.BodyLength && geminiHandler.ContentLength > 0, "Gemini request must include the UTF-8 Content-Length");
     foreach (var (method, header, expected) in new[] { ("none", "Authorization", ""), ("bearer", "Authorization", "Bearer test-key"), ("api-key", "api-key", "test-key"), ("x-api-key", "x-api-key", "test-key") }) {
         var authHandler = new GeminiHandler();
@@ -111,6 +122,10 @@ try
     await Reject(() => readonlyTools.ExecuteAsync("write_file", Args("{\"path\":\"blocked.txt\",\"content\":\"bad\"}"), default), "Writes disabled but executed");
     await Reject(() => readonlyTools.ExecuteAsync("web_read", Args("{\"url\":\"https://example.com\"}"), default), "Web disabled but executed");
     var commandTools = new ChatTools(root, false, false, allowCommands: true);
+    var runtimeInfo = await commandTools.RuntimeEnvironmentAsync(default);
+    Assert(runtimeInfo.Contains("Python:") && runtimeInfo.Contains("Node.js:") && runtimeInfo.Contains("Windows PowerShell: available") && runtimeInfo.Contains("file changes"), "Runtime availability and script editing must be described");
+    var scriptEdit = JsonNode.Parse(await commandTools.ExecuteAsync("execute_command", new JsonObject { ["command"] = "[IO.File]::WriteAllText('script-edit.txt', 'edited')" }, default))!;
+    Assert(scriptEdit["exit_code"]!.GetValue<int>() == 0 && File.ReadAllText(Path.Combine(root, "script-edit.txt")) == "edited", "Command scripts must be able to edit files");
     Assert(commandTools.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "execute_command") && !readonlyTools.Definitions().Any(t => t?["function"]?["name"]?.GetValue<string>() == "execute_command"), "Command definition must follow its enable setting");
     await Reject(() => readonlyTools.ExecuteAsync("execute_command", Args("{\"command\":\"Write-Output 'blocked'\"}"), default), "Disabled command execution accepted");
     var command = "[Console]::WriteLine('日本語');\n[Console]::WriteLine((Get-Location).Path); [Console]::Error.WriteLine('エラー'); exit 7";
@@ -209,6 +224,8 @@ try
     Console.WriteLine("PASS: separate streamed reasoning, per-round assembly, history persistence, display-only metadata and visibility setting");
     Assert(handler.Requests.All(r => r["model"]!.GetValue<string>() == "server-model"), "Model ID must come from props");
     Assert(handler.Requests.All(r => r["reasoning_effort"]!.GetValue<string>() == "low"), "Reasoning level must reach every model/tool turn");
+    Assert(handler.Requests.All(r => r["reasoning_budget_tokens"]!.GetValue<int>() == 1536), "Low reasoning budget must reach every model/tool turn");
+    Assert(handler.Requests.All(r => r["chat_template_kwargs"]!["enable_thinking"]!.GetValue<bool>()), "Thinking must be enabled for reasoning turns");
     Assert(handler.Requests.All(r => r["stream_options"]!["include_usage"]!.GetValue<bool>()), "Streaming usage must be requested for every round");
     Assert(session.ContextTokens == 280 && store.Load().Single().ContextTokens == 280, "Latest usage must include cached tokens, replace previous tool-round usage, and persist");
     Console.WriteLine("PASS: context limit, usage-only SSE chunks, latest-round token totals, persistence and reasoning labels");

@@ -48,7 +48,9 @@ def main():
                 remaining -= len(chunk)
     files = manifest["Files"]
     paths = {item["Destination"].replace("\\", "/") for item in files}
-    assert not any(path.lower().endswith(".gguf") or "runtime/llama.cpp/" in path.lower() for path in paths)
+    assert not any(path.lower().endswith((".gguf", "/local-rocm.exe", "/llama-server.exe")) or
+                   any(part in path.lower() for part in ("runtime/llama.cpp/", "runtime/native/", "runtime/rocm/"))
+                   for path in paths)
     expected_paths = {"app/" + item["path"] for item in expected}
     assert paths - expected_paths <= {".hsis/Application.ico"}, paths - expected_paths
     assert expected_paths <= paths

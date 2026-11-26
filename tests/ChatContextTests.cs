@@ -11,6 +11,40 @@ static string Tool(string id, string arguments, string finish = "tool_calls") =>
 static ChatSession History(int count = 8) => new() { Messages = Enumerable.Range(0, count).Select(i => Message(i % 2 == 0 ? "user" : "assistant", "message-" + i)).ToList() };
 var tools = new ChatTools("", false, false);
 
+var readRoot = Path.Combine(Path.GetTempPath(), "chat-read-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(readRoot);
+try {
+    var reader = new ChatTools(readRoot, false, false);
+    var fifty = string.Join("\r\n", Enumerable.Range(1, 50).Select(i => $"line {i}")) + "\r\n";
+    var file = Path.Combine(readRoot, "lines.txt");
+    await File.WriteAllTextAsync(file, fifty);
+    Check(await reader.ExecuteAsync("read_file", new() { ["path"] = "lines.txt" }, default) == fifty, "Exactly 50 lines must not be truncated");
+    await File.WriteAllTextAsync(file, fifty + "line 51");
+    var limited = await reader.ExecuteAsync("read_file", new() { ["path"] = "lines.txt" }, default);
+    Check(limited.StartsWith(fifty) && !limited.Contains("line 51") && limited.Contains("read_all"), "Default read must report omitted lines");
+    Check(await reader.ExecuteAsync("read_file", new() { ["path"] = "lines.txt", ["read_all"] = true }, default) == fifty + "line 51", "Full read must preserve all content");
+    var definition = reader.Definitions().Single(t => t?["function"]?["name"]?.GetValue<string>() == "read_file")!;
+    Check(definition["function"]!["parameters"]!["properties"]!["read_all"]!["type"]!.GetValue<string>() == "boolean" && !definition["function"]!["parameters"]!["required"]!.AsArray().Any(x => x!.GetValue<string>() == "read_all"), "Full read option must be optional and advertised");
+} finally { Directory.Delete(readRoot, true); }
+
+using (var handler = new ContextHandler()) using (var http = new HttpClient(handler)) {
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("done")));
+    await new ChatClient(http).GenerateAsync(History(1), tools, new Quiet(), () => { }, default, "none");
+    Check(handler.Requests[0]["reasoning_effort"]!.GetValue<string>() == "none" && !handler.Requests[0]["chat_template_kwargs"]!["enable_thinking"]!.GetValue<bool>(), "Off must disable thinking in the initial request");
+    var system = handler.Requests[0]["messages"]![0]!["content"]!.GetValue<string>();
+    Check(system.Contains("Python:") && system.Contains("Node.js:") && system.Contains("Windows PowerShell:") && system.Contains("execute_command is disabled"), "Local chat must receive runtime availability and command state");
+}
+
+// Explicit budgets work even when the model template ignores reasoning_effort.
+foreach (var (effort, budget) in new[] { ("low", (int?)1536), ("medium", (int?)4096), ("xhigh", (int?)null), ("none", (int?)null) }) {
+    using var handler = new ContextHandler(); using var http = new HttpClient(handler);
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("partial", "length")));
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("done")));
+    await new ChatClient(http).GenerateAsync(History(1), tools, new Quiet(), () => { }, default, effort);
+    Check(handler.Requests[0]["reasoning_budget_tokens"]?.GetValue<int>() == budget, "Incorrect reasoning budget for " + effort);
+    Check(handler.Requests[1]["reasoning_effort"]!.GetValue<string>() == "none" && handler.Requests[1]["reasoning_budget_tokens"] == null, "Continuation must disable reasoning without a budget");
+}
+
 // Partial replies are saved and merged, with continuation prompts sent only to the API.
 using (var handler = new ContextHandler()) using (var http = new HttpClient(handler)) {
     var session = History(1);
@@ -21,6 +55,7 @@ using (var handler = new ContextHandler()) using (var http = new HttpClient(hand
     Check(saves == 6 && session.Messages.Count == 2 && session.Messages.Last()["content"]!.GetValue<string>() == "part-0part-1part-2part-3part-4done", "Long answer did not continue and merge");
     Check(handler.Requests[1]["messages"]!.AsArray().Last()!["role"]!.GetValue<string>() == "user", "Missing continuation instruction");
     Check(handler.Requests[1]["reasoning_effort"]!.GetValue<string>() == "none", "Recovery should avoid spending another budget on reasoning");
+    Check(!handler.Requests[1]["chat_template_kwargs"]!["enable_thinking"]!.GetValue<bool>(), "Recovery must disable thinking in the chat template");
 }
 
 // Reasoning-only exhaustion retries; a truncated tool batch must never execute.
@@ -74,14 +109,23 @@ using (var handler = new ContextHandler()) using (var http = new HttpClient(hand
     finally { if (Directory.Exists(path)) Directory.Delete(path, true); }
 }
 
-// Oversized history is summarized in bounded chunks, without relying on old usage.
+// Fit old history into one summary request when the context has space.
 using (var handler = new ContextHandler()) using (var http = new HttpClient(handler)) {
     var session = History(2); session.Messages[0]["content"] = new string('あ', 18000); session.ContextTokens = 50000;
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("one summary")));
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("done")));
+    await new ChatClient(http).GenerateAsync(session, tools, new Quiet(), () => { }, default);
+    Check(handler.Requests.Count == 2 && session.CompactedMessageCount == 1 && session.Summary == "one summary", "History that fits required multiple summary requests");
+}
+
+// Oversized history is still summarized in bounded chunks.
+using (var handler = new ContextHandler()) using (var http = new HttpClient(handler)) {
+    var session = History(2); session.Messages[0]["content"] = new string('あ', 72000); session.ContextTokens = 50000;
     for (int i = 0; i < 3; i++) handler.Replies.Enqueue((HttpStatusCode.OK, Reply("summary-" + i)));
     handler.Replies.Enqueue((HttpStatusCode.OK, Reply("done")));
     await new ChatClient(http).GenerateAsync(session, tools, new Quiet(), () => { }, default);
     Check(handler.Requests.Count == 4 && session.CompactedMessageCount == 1 && session.Summary == "summary-2", "Oversized history not summarized in chunks");
-    Check(handler.Requests.Take(3).All(r => r["messages"]!.AsArray().Sum(m => m!["content"]!.GetValue<string>().Length) < 10000), "Unbounded summarization input");
+    Check(handler.Requests.Take(3).All(r => r["messages"]!.AsArray().Sum(m => ChatCompaction.EstimateText(m!["content"]!.GetValue<string>())) < 50000), "Unbounded summarization input");
 }
 
 // Never start model context with an orphaned tool result.
@@ -97,13 +141,27 @@ Check(ChatCompaction.Estimate(image) < 10000, "Base64 counted as text tokens");
 using (var handler = new ContextHandler()) using (var http = new HttpClient(handler)) {
     var session = History(1);
     handler.Replies.Enqueue((HttpStatusCode.OK, Tool("large", "{\"action\":\"read\"}")));
-    for (int i = 0; i < 20; i++) handler.Replies.Enqueue((HttpStatusCode.OK, Reply("tool summary-" + i)));
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("user request summary")));
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("first tool summary")));
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("combined tool summary")));
     handler.Replies.Enqueue((HttpStatusCode.OK, Reply("task complete")));
     var browser = new ChatTools("", true, false, browserTool: (a, ct) => Task.FromResult(new string('x', 150000)));
     await new ChatClient(http).GenerateAsync(session, browser, new Quiet(), () => { }, default);
     Check(session.CompactedMessageCount == 3 && session.Messages.Count == 4, "Oversized tool batch was not summarized intact");
+    Check(handler.Requests.Count == 5 && session.Summary == "combined tool summary", "Unexpected number of tool-result summary requests");
     Check(handler.Requests.Last()["messages"]!.AsArray().All(m => m?["role"]?.GetValue<string>() != "tool"), "Orphaned large tool result was resent");
     Check(session.Messages.Last()["content"]!.GetValue<string>() == "task complete", "Task did not continue after tool-result compaction");
+}
+
+// A server-side token count can exceed the estimate. Retry with smaller chunks.
+using (var handler = new ContextHandler()) using (var http = new HttpClient(handler)) {
+    var session = History(2); session.Messages[0]["content"] = new string('x', 2000); session.ContextTokens = 50000;
+    handler.Replies.Enqueue((HttpStatusCode.BadRequest, "{\"error\":{\"type\":\"exceed_context_size\"}}"));
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("first half")));
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("combined summary")));
+    handler.Replies.Enqueue((HttpStatusCode.OK, Reply("done")));
+    await new ChatClient(http).GenerateAsync(session, tools, new Quiet(), () => { }, default);
+    Check(handler.Requests.Count == 4 && session.Summary == "combined summary", "Summary context overflow was not recovered by splitting");
 }
 
 // Failed or cancelled summarization cannot change the old summary/boundary/history.
