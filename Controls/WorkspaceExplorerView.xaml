@@ -34,7 +34,7 @@
             ToolTipService.ToolTip="{x:Bind ((services:WorkspaceEntry)Content).Path}"
             AutomationProperties.Name="{x:Bind ((services:WorkspaceEntry)Content).Name}">
         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-        <local:WorkspaceItemIcon IsDirectory="{x:Bind ((services:WorkspaceEntry)Content).IsDirectory}" VerticalAlignment="Center"/>
+        <local:WorkspaceItemIcon IsDirectory="{x:Bind ((services:WorkspaceEntry)Content).IsDirectory}" Path="{x:Bind ((services:WorkspaceEntry)Content).Path}" VerticalAlignment="Center"/>
         <TextBlock Grid.Column="1" Text="{x:Bind ((services:WorkspaceEntry)Content).Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
       </Grid>
     </DataTemplate>

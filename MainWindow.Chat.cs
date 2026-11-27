@@ -327,7 +327,8 @@ public sealed partial class MainWindow
         UpdateReasoningVisibilityButton();
         AttachmentList.IsHitTestVisible = true;
         ChatInput.IsEnabled = true;
-        AttachButton.IsEnabled = true;
+        AttachButton.IsEnabled = settings.ChatProvider == "gemini" || (serverStatus.IsConnected && localVisionEnabled);
+        ToolTipService.SetToolTip(AttachButton, AttachButton.IsEnabled ? "画像を追加" : "画像入力には対応する mmproj が必要です。");
     }
 
     private void UpdateChatStatus()
@@ -379,9 +380,37 @@ public sealed partial class MainWindow
             ChatMessages.Children.Add(new TextBlock { Text = "何をお手伝いしましょうか？", FontSize = 24, Margin = new Thickness(0, 32, 0, 12) });
             ChatMessages.Children.Add(new TextBlock { Text = "画像について質問したり、ウェブを参照したり、作業フォルダーのファイルを検索・編集できます。", TextWrapping = TextWrapping.Wrap, Opacity = 0.65 });
         }
+        var toolItems = new List<UIElement>();
+        var toolLabels = new List<string>();
+        void FlushToolItems()
+        {
+            if (toolItems.Count == 0) return;
+            if (toolLabels.Count < 2) { foreach (var item in toolItems) ChatMessages.Children.Add(item); }
+            else
+            {
+                var label = string.Join(" ", toolLabels.Distinct());
+                var items = new StackPanel { Spacing = 4, Margin = new Thickness(12, 0, 0, 0) };
+                foreach (var item in toolItems) items.Children.Add(item);
+                var content = new Border { BorderThickness = new Thickness(1, 0, 0, 0), BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"], Child = items };
+                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                header.Children.Add(new FontIcon { Glyph = toolLabels.All(label => label == "検索しました") ? "\uE721" : "\uE756", FontSize = 14 });
+                header.Children.Add(new TextBlock { Text = label, FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Noto Sans JP") });
+                var chevron = new FontIcon { Glyph = "\uE76C", FontSize = 10 };
+                header.Children.Add(chevron);
+                var toggle = new Button { Content = header, Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0), Padding = new Thickness(0, 4, 0, 4), MinWidth = 0, MinHeight = 0, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"], HorizontalAlignment = HorizontalAlignment.Left };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, label + " の詳細を表示");
+                content.Visibility = Visibility.Collapsed;
+                toggle.Click += (_, _) => { var expanded = content.Visibility != Visibility.Visible; content.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed; chevron.Glyph = expanded ? "\uE70D" : "\uE76C"; Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, label + (expanded ? " の詳細を閉じる" : " の詳細を表示")); };
+                var group = new StackPanel { Spacing = 4 };
+                group.Children.Add(toggle); group.Children.Add(content); ChatMessages.Children.Add(group);
+            }
+            toolItems.Clear(); toolLabels.Clear();
+        }
         foreach (var message in currentChat.Messages)
         {
             var role = message["role"]?.GetValue<string>();
+            var toolTurn = ChatToolDisplay.IsToolTurn(message);
+            if (!toolTurn) FlushToolItems();
             var block = new StackPanel { Spacing = 8 };
             if (role == "assistant" && settings.ChatShowReasoning && message["reasoning_content"]?.GetValue<string>() is { Length: > 0 } reasoning)
                 block.Children.Add(RenderReasoning(reasoning));
@@ -394,10 +423,11 @@ public sealed partial class MainWindow
                 var toolName = message["name"]?.GetValue<string>() ?? "";
                 (string toolLabel, string toolGlyph) = toolName switch
                 {
+                    "list_directory" => ("ファイル一覧の取得", "\uE8B7"),
                     "read_file" => ("ファイル読み込み", "\uE8C3"),
                     "write_file" => ("ファイル書き込み", "\uE70F"),
                     "execute_command" => ("コマンドを実行しました", "\uE756"),
-                    "web_search" => ("ウェブを検索しました", "\uE756"),
+                    "web_search" => ("検索しました", "\uE721"),
                     _ => ("ツール: " + toolName, "\uE756")
                 };
                 var toolPanel = new StackPanel { Spacing = 4 };
@@ -410,7 +440,7 @@ public sealed partial class MainWindow
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, toolLabel + " の詳細を表示");
                 detail.Visibility = Visibility.Collapsed;
                 toggle.Click += (_, _) => { var expanded = detail.Visibility != Visibility.Visible; detail.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed; chevron.Glyph = expanded ? "\uE70D" : "\uE76C"; Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(toggle, toolLabel + (expanded ? " の詳細を閉じる" : " の詳細を表示")); };
-                toolPanel.Children.Add(toggle); toolPanel.Children.Add(detail); ChatMessages.Children.Add(toolPanel);
+                toolPanel.Children.Add(toggle); toolPanel.Children.Add(detail); toolItems.Add(toolPanel); toolLabels.Add(toolLabel);
                 continue;
             }
             var text = "";
@@ -439,9 +469,10 @@ public sealed partial class MainWindow
             {
                 if (text.Length > 0) block.Children.Add(RenderMarkdown(text));
                 if (role == "assistant" && text.Length > 0) block.Children.Add(CreateMessageActions(text, message["display_timestamp"]?.GetValue<string>()));
-                ChatMessages.Children.Add(block);
+                if (toolTurn) toolItems.Add(block); else ChatMessages.Children.Add(block);
             }
         }
+        FlushToolItems();
         if (chatCancellation != null)
         {
             streamingText = new ContentControl { HorizontalContentAlignment = HorizontalAlignment.Stretch, Content = RenderStreamingProgress() };
@@ -567,32 +598,13 @@ public sealed partial class MainWindow
         catch { image.Visibility = Visibility.Collapsed; }
     }
 
-    private async Task ConfigureWorkspaceAsync(ChatWorkspace? workspace)
+    private Task ConfigureWorkspaceAsync(ChatWorkspace? workspace)
     {
-        if (chatCancellation != null || handlingChatCommand) return;
-        try
-        {
-            var input = new TextBox { Header = "作業ディレクトリ", Text = workspace?.Directory ?? settings.DefaultWorkspaceDirectory, MinWidth = 320, TextWrapping = TextWrapping.Wrap };
-            var browse = new Button { Content = "フォルダーを選択" };
-            var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
-            var content = new StackPanel { Spacing = 12 }; content.Children.Add(input); content.Children.Add(browse); content.Children.Add(error);
-            browse.Click += async (_, _) => {
+        if (chatCancellation != null || handlingChatCommand) return Task.CompletedTask;
+        ShowFileBrowser(workspace?.Directory ?? settings.DefaultWorkspaceDirectory, true, false, Array.Empty<string>(), paths => {
                 try
                 {
-                    var picker = new Windows.Storage.Pickers.FolderPicker(); picker.FileTypeFilter.Add("*");
-                    WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-                    var folder = await picker.PickSingleFolderAsync();
-                    if (folder != null && !closing) { input.Text = folder.Path; error.Visibility = Visibility.Collapsed; }
-                }
-                catch (Exception ex) { error.Text = ex.Message; error.Visibility = Visibility.Visible; }
-            };
-            var dialog = new ContentDialog { XamlRoot = RootLayout.XamlRoot, Title = workspace == null ? "ワークスペースを作成" : "作業ディレクトリを設定", Content = content,
-                PrimaryButtonText = workspace == null ? "作成" : "保存", CloseButtonText = "キャンセル", DefaultButton = ContentDialogButton.Primary };
-            dialog.PrimaryButtonClick += (_, args) => {
-                try
-                {
-                    if (string.IsNullOrWhiteSpace(input.Text)) throw new IOException("作業フォルダーを指定してください。");
-                    var path = Path.GetFullPath(Environment.ExpandEnvironmentVariables(input.Text.Trim()), settings.DefaultWorkspaceDirectory);
+                    var path = paths[0];
                     if (!Directory.Exists(path)) throw new DirectoryNotFoundException("フォルダーが見つかりません。");
                     if (workspace == null) {
                         var created = new ChatWorkspace { Directory = path };
@@ -614,11 +626,9 @@ public sealed partial class MainWindow
                     RefreshWorkspaceExplorer();
                     RestoreConsoleVisibility();
                 }
-                catch (Exception ex) { args.Cancel = true; error.Text = ex.Message; error.Visibility = Visibility.Visible; }
-            };
-            await dialog.ShowAsync();
-        }
-        catch (Exception ex) { ShowError(ex.Message); }
+                catch (Exception ex) { ShowError(ex.Message); }
+        });
+        return Task.CompletedTask;
     }
 
     private async void OnChatToolsSettings(object sender, RoutedEventArgs e)
@@ -679,16 +689,18 @@ public sealed partial class MainWindow
         catch (Exception ex) { if (!closing) ShowError(ex.Message); }
     }
 
-    private async void OnAttachImage(object sender, RoutedEventArgs e)
+    private void OnAttachImage(object sender, RoutedEventArgs e)
+    {
+        ShowFileBrowser(settings.DefaultWorkspaceDirectory, false, true, new[] { ".png", ".jpg", ".jpeg", ".webp" }, paths => _ = AttachImagesAsync(paths));
+    }
+
+    private async Task AttachImagesAsync(string[] files)
     {
         try
         {
-            var picker = new Windows.Storage.Pickers.FileOpenPicker();
-            foreach (var type in new[] { ".png", ".jpg", ".jpeg", ".webp" }) picker.FileTypeFilter.Add(type);
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-            var files = await picker.PickMultipleFilesAsync();
-            foreach (var file in files)
+            foreach (var path in files)
             {
+                var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
                 if (closing) return;
                 if (attachments.Count >= 4) throw new IOException("画像は 1 メッセージに 4 枚までです。");
                 if (new FileInfo(file.Path).Length > 10 * 1024 * 1024) throw new IOException("画像は 1 枚 10 MiB までです。");
@@ -696,20 +708,25 @@ public sealed partial class MainWindow
                 var mime = file.FileType.ToLowerInvariant() switch { ".png" => "image/png", ".webp" => "image/webp", _ => "image/jpeg" };
                 var data = "data:" + mime + ";base64," + Convert.ToBase64String(await File.ReadAllBytesAsync(file.Path));
                 var attachment = (file.Name, data); attachments.Add(attachment);
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-                var thumbnail = new Image { Width = 48, Height = 48 }; row.Children.Add(thumbnail); _ = LoadThumbnail(thumbnail, data);
-                row.Children.Add(new TextBlock { Text = file.Name, VerticalAlignment = VerticalAlignment.Center });
-                var remove = new Button { Content = "×" }; ToolTipService.SetToolTip(remove, "画像を取り除く");
-                remove.Click += (_, _) => { attachments.Remove(attachment); AttachmentList.Children.Remove(row); if (attachments.Count == 0) AttachmentList.Visibility = Visibility.Collapsed; };
-                row.Children.Add(remove); AttachmentList.Children.Add(row); AttachmentList.Visibility = Visibility.Visible;
+                var preview = new Grid { Width = 48, Height = 64 };
+                var thumbnail = new Image { Width = 48, Height = 64, Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill }; preview.Children.Add(thumbnail); _ = LoadThumbnail(thumbnail, data);
+                var remove = new Button { Content = "×", Width = 20, Height = 20, MinWidth = 0, MinHeight = 0, Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+                ToolTipService.SetToolTip(remove, "画像を取り除く");
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(remove, "画像を取り除く");
+                remove.Click += (_, _) => { attachments.Remove(attachment); AttachmentList.Children.Remove(preview); if (attachments.Count == 0) AttachmentList.Visibility = Visibility.Collapsed; };
+                preview.Children.Add(remove); AttachmentList.Children.Add(preview); AttachmentList.Visibility = Visibility.Visible;
             }
         }
         catch (Exception ex) { ShowError("画像を追加できません: " + ex.Message); }
     }
 
-    private void SetChatActivity(string text)
+    private void SetChatActivity(string text, string toolName = "")
     {
-        ChatActivity.Text = text;
+        var suffixIndex = toolName.Length > 0 ? text.LastIndexOf(" を", StringComparison.Ordinal) : -1;
+        ChatActivity.Text = suffixIndex >= 0 ? text[..suffixIndex] : text;
+        ChatActivitySuffix.Text = suffixIndex >= 0 ? text[suffixIndex..] : "";
+        ChatActivityToolIcon.Glyph = toolName switch { "web_search" or "web_read" => "\uE721", "read_file" => "\uE8C3", "write_file" or "edit_file" => "\uE70F", _ => "\uE756" };
+        ChatActivityToolIcon.Visibility = Visibility.Collapsed;
         ChatActivityPanel.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         UpdateChatSpinner();
     }
@@ -736,11 +753,15 @@ public sealed partial class MainWindow
     {
         if (closing || gitBusy || currentChat == null) return;
         var text = ChatInput.Text.Trim(); var session = currentChat;
+        if (text.Equals("/goal", StringComparison.OrdinalIgnoreCase)) { ShowError("/goal の後に目標を入力してください。"); return; }
         if (ChatCommands.Parse(text) is { } command) { await RunChatCommandAsync(command, session); return; }
         if (!ChatAvailable) return;
+        if (attachments.Count > 0 && settings.ChatProvider != "gemini" && !localVisionEnabled) { ShowError("画像入力は無効です。画像を取り除くか、対応する mmproj を指定してサーバーを再起動してください。"); return; }
+        if (settings.ChatProvider != "gemini" && !localVisionEnabled && session.Messages.Any(m => m["content"] is JsonArray parts && parts.Any(p => p?["type"]?.GetValue<string>() == "image_url")))
+        { ShowError("この会話には画像が含まれています。画像入力が無効な場合は新しいチャットを開始してください。"); return; }
         if (!pendingMessages.TryGetValue(session.Id, out var pending)) pendingMessages[session.Id] = pending = new();
         bool hasInput = text.Length > 0 || attachments.Count > 0;
-        bool retry = !hasInput && (session.Messages.LastOrDefault()?["role"]?.GetValue<string>() is "user" or "tool" || session.Messages.LastOrDefault()?["incomplete"]?.GetValue<bool>() == true);
+        bool retry = !hasInput && (session.Messages.LastOrDefault()?["role"]?.GetValue<string>() is "user" or "tool" || session.Messages.LastOrDefault()?["incomplete"]?.GetValue<bool>() == true || ChatGoal.HasPendingReview(session));
         if (hasInput)
         {
             JsonNode content = JsonValue.Create(text)!;
@@ -858,6 +879,9 @@ public sealed partial class MainWindow
         activeChatTurn = completion;
         try
         {
+            if (settings.ChatProvider != "gemini" && !localVisionEnabled &&
+                (session.Messages.Append(message).Where(m => m != null).Any(m => m!["content"] is JsonArray parts && parts.Any(p => p?["type"]?.GetValue<string>() == "image_url"))))
+                throw new InvalidOperationException("画像入力は無効です。画像を含む会話は送信できません。");
             if (message != null)
             {
                 var text = message["content"] is JsonValue value ? value.GetValue<string>() : "";
@@ -867,7 +891,6 @@ public sealed partial class MainWindow
                 catch { session.Messages.Remove(message); throw; }
                 pending.Dequeue();
             }
-            Notice.IsOpen = false;
             using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(30)); chatCancellation = cancellation;
             streamingProgress = null;
             UpdateChatControls(); RenderConversation(); RefreshSessions();
@@ -879,10 +902,14 @@ public sealed partial class MainWindow
                 if (update.ContextTokens is { } contextTokens) { session.ContextTokens = contextTokens; UpdateChatStatus(); }
                 streamingProgress = update;
                 if (streamingText != null) streamingText.Content = RenderStreamingProgress();
-                SetChatActivity(update.Activity == "完了" ? "" : update.Activity);
+                SetChatActivity(update.Activity == "完了" ? "" : update.Activity, update.ToolName);
                 ScrollChatToEnd();
             });
-            var tools = new ChatTools(session.Workspace, settings.ChatWebEnabled, settings.ChatWritesEnabled, allowCommands: settings.ChatCommandsEnabled, browserTool: FileEditor.ExecuteBrowserAsync);
+            var tools = new ChatTools(session.Workspace, settings.ChatWebEnabled, settings.ChatWritesEnabled, allowCommands: settings.ChatCommandsEnabled, browserTool: async (args, ct) => {
+                if (settings.ChatProvider != "gemini" && !localVisionEnabled && args["action"]?.GetValue<string>() == "screenshot")
+                    throw new InvalidOperationException("画像入力が無効のため、スクリーンショットをモデルに送信できません。");
+                return await FileEditor.ExecuteBrowserAsync(args, ct);
+            });
             var reasoningEffort = settings.ChatReasoningEffort;
             // Generation owns a separate transcript; the UI receives stable snapshots.
             generationSession = new ChatSession { Id = session.Id, Title = session.Title, Workspace = session.Workspace, WorkspaceId = session.WorkspaceId,
@@ -897,9 +924,15 @@ public sealed partial class MainWindow
                 DispatcherQueue.TryEnqueue(() => { if (!closing && chatCancellation == cancellation) { session.Messages = snapshot; session.Summary = summary; session.CompactedMessageCount = compactedCount; session.ContextTokens = contextTokens; session.UpdatedAt = generationSession.UpdatedAt; streamingProgress = null; RenderConversation(); } });
             };
             string provider = settings.ChatProvider, url = settings.GeminiUrl, authMethod = settings.GeminiAuthMethod, apiKey = settings.GeminiApiKey;
-            await Task.Run(() => provider == "gemini"
-                ? new GeminiChatClient(chatHttp, url, authMethod, apiKey).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort)
-                : new ChatClient(chatHttp).GenerateAsync(generationSession, tools, progress, saveGeneration, cancellation.Token, reasoningEffort));
+            await Task.Run(async () => {
+                async Task Generate(ChatSession target, bool allowTools, IProgress<ChatProgress> output, Action save) {
+                    if (provider == "gemini") await new GeminiChatClient(chatHttp, url, authMethod, apiKey).GenerateAsync(target, tools, output, save, cancellation.Token, reasoningEffort, allowTools);
+                    else await new ChatClient(chatHttp).GenerateAsync(target, tools, output, save, cancellation.Token, reasoningEffort, allowTools);
+                }
+                var goal = ChatGoal.FindActive(generationSession);
+                if (goal == null) await Generate(generationSession, true, progress, saveGeneration);
+                else await ChatGoal.RunAsync(generationSession, goal, Generate, progress, saveGeneration, cancellation.Token);
+            });
             cancellation.Token.ThrowIfCancellationRequested();
             if (generationSession.Messages.LastOrDefault() is { } answer && answer["role"]?.GetValue<string>() == "assistant")
             {

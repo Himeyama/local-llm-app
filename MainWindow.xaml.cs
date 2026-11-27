@@ -23,6 +23,8 @@ public sealed partial class MainWindow : Window
     private bool historyExpanded = true;
     private Action? saveServerSettings;
     private TextBox[] serverLaunchInputs = Array.Empty<TextBox>();
+    private Button[] serverPickButtons = Array.Empty<Button>();
+    private bool localVisionEnabled;
     private Button[] cliButtons = Array.Empty<Button>();
     private bool activeServerLanAccess, codexLanStartAttempted, codexLanReady;
     private string codexLanError = "", lanModel = "";
@@ -149,14 +151,29 @@ public sealed partial class MainWindow : Window
         LogScroll.UpdateLayout();
         LogScroll.ChangeView(null, offset, null, disableAnimation: true);
     }
+    private readonly Dictionary<InfoBar, DispatcherTimer> notificationTimers = new();
+    private readonly HashSet<InfoBar> hoveredNotifications = new();
     private void ShowError(string message)
     {
-        Notice.Severity = InfoBarSeverity.Error; Notice.Title = "操作を完了できません"; Notice.Message = message; Notice.IsOpen = true;
+        var notice = new InfoBar { Severity = InfoBarSeverity.Error, Title = "操作を完了できません", IsClosable = true,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true, Margin = new Thickness(0, 0, 0, 12) } };
+        var dismissTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        notificationTimers.Add(notice, dismissTimer);
+        dismissTimer.Tick += (_, _) => notice.IsOpen = false;
+        notice.Closed += (_, _) => {
+            dismissTimer.Stop(); notificationTimers.Remove(notice); hoveredNotifications.Remove(notice); Notifications.Children.Remove(notice);
+            if (Notifications.Children.Count == 0) NotificationScroll.Visibility = Visibility.Collapsed;
+        };
+        notice.PointerEntered += (_, _) => { hoveredNotifications.Add(notice); dismissTimer.Stop(); };
+        notice.PointerExited += (_, _) => { hoveredNotifications.Remove(notice); if (settings.DismissErrorsAutomatically) dismissTimer.Start(); };
+        Notifications.Children.Add(notice); NotificationScroll.Visibility = Visibility.Visible; notice.IsOpen = true;
+        if (settings.DismissErrorsAutomatically) dismissTimer.Start();
+        NotificationScroll.UpdateLayout(); NotificationScroll.ChangeView(null, NotificationScroll.ScrollableHeight, null);
         AddLog(message);
     }
     private void Execute(Action action)
     {
-        try { Notice.IsOpen = false; action(); } catch (Exception e) { ShowError(e.Message); }
+        try { action(); } catch (Exception e) { ShowError(e.Message); }
     }
     private string Script(string name)
     {
@@ -286,6 +303,7 @@ public sealed partial class MainWindow : Window
         saveServerSettings = null;
         ServerCommandBar.Visibility = page == "server" ? Visibility.Visible : Visibility.Collapsed;
         serverLaunchInputs = Array.Empty<TextBox>();
+        serverPickButtons = Array.Empty<Button>();
         cliButtons = Array.Empty<Button>();
         codexLanStatus = null; codexLanAddress = null; copyCodexLanCommand = null; retryCodexLanProxy = null;
         Form.Children.Clear();
@@ -308,6 +326,12 @@ public sealed partial class MainWindow : Window
                     ApplyAppScale();
                     settings.Save();
                 });
+                var dismissErrors = SettingCard("エラー通知を自動で閉じる", "オンの場合、エラー通知を3秒後に閉じます。通知にポインターを置いている間は閉じません。", new ToggleSwitch { IsOn = settings.DismissErrorsAutomatically, OnContent = "オン", OffContent = "オフ" });
+                dismissErrors.Toggled += (_, _) => Execute(() => {
+                    settings.DismissErrorsAutomatically = dismissErrors.IsOn;
+                    settings.Save();
+                    foreach (var (notice, timer) in notificationTimers) { timer.Stop(); if (dismissErrors.IsOn && !hoveredNotifications.Contains(notice)) timer.Start(); }
+                });
                 BeginSettingGroup();
                 var lanAccess = SettingCard("LAN に公開", "LAN 内で llama-server と Codex を利用できます。変更は自動保存され、次回起動時に反映されます。",
                     new ToggleSwitch { OnContent = "オン", OffContent = "オフ", IsOn = settings.ServerLanAccess });
@@ -321,8 +345,10 @@ public sealed partial class MainWindow : Window
                 var threads = SettingCard("CPU スレッド", "処理に使用する CPU スレッド数。", Number("CPU スレッド", settings.Threads, 1, 512));
                 var mtp = SettingCard("MTP draft tokens", "標準の Rust 基盤では無効です。llama.cpp 使用時は 0 で無効になります。", Number("MTP draft tokens", settings.MtpDraftTokens, 0, 16));
                 BeginSettingGroup();
-                var model = SettingCard("モデル", "GGUF モデルの絶対パス。", Input("モデルの絶対パス", AssetPath(settings.ModelPath, Settings.DefaultModelPath)));
-                var mmproj = SettingCard("画像入力用 mmproj", "llama.cpp 使用時のみ。標準の Rust 基盤はテキスト専用です。", Input("対応する mmproj の絶対パス", AssetPath(settings.MmprojPath, Settings.DefaultMmprojPath)));
+                var model = Input("モデルの絶対パス", AssetPath(settings.ModelPath, Settings.DefaultModelPath));
+                SettingCard("モデル", "GGUF モデルを選択してください。", FilePathEditor(model, "モデルを選択"));
+                var mmproj = Input("対応する mmproj の絶対パス", AssetPath(settings.MmprojPath, Settings.DefaultMmprojPath));
+                SettingCard("画像入力用 mmproj", "省略すると画像入力は無効です。標準の Rust 基盤はテキスト専用です。", FilePathEditor(mmproj, "mmproj を選択"));
                 var exe = SettingCard("推論サーバー", "標準は同梱の Rust / ROCm 基盤です。互換サーバーの実行ファイルも指定できます。", Input("推論サーバーの絶対パス", AssetPath(settings.ServerExe, Settings.DefaultServerExe)));
                 serverLaunchInputs = new[] { model, mmproj, exe };
                 saveServerSettings = () => {
@@ -341,6 +367,8 @@ public sealed partial class MainWindow : Window
                 autoSave.Toggled += (_, _) => Execute(() => { settings.EditorAutoSave = autoSave.IsOn; settings.Save(); FileEditor.AutoSaveEnabled = autoSave.IsOn; });
                 var wordWrap = SettingCard("エディタの折り返し", "長い行をエディタの幅に合わせて表示します。ファイルの改行は変更しません。", new ToggleSwitch { IsOn = settings.EditorWordWrap, OnContent = "オン", OffContent = "オフ" });
                 wordWrap.Toggled += (_, _) => Execute(() => { settings.EditorWordWrap = wordWrap.IsOn; settings.Save(); FileEditor.WordWrapEnabled = wordWrap.IsOn; });
+                BeginSettingGroup();
+                SettingCard("Playwright MCP", "ウェブ検索に必要なセットアップ手順を表示します。", Button("設定手順を開く", () => _ = ShowPlaywrightSetupAsync()));
                 break;
             case "cli":
                 var workingDirectory = Input("作業ディレクトリ", string.IsNullOrWhiteSpace(settings.CliWorkingDirectory) ? settings.RepositoryRoot : settings.CliWorkingDirectory);
@@ -387,8 +415,46 @@ public sealed partial class MainWindow : Window
             case "logs": UpdateLogView(); break;
         }
     }
-    private string AssetPath(string path, string defaultPath) => Path.GetFullPath(
-        Environment.ExpandEnvironmentVariables(string.IsNullOrWhiteSpace(path) ? defaultPath : path.Trim()), settings.RepositoryRoot);
+    private async Task ShowPlaywrightSetupAsync()
+    {
+        try
+        {
+            var folder = Path.Combine(settings.RepositoryRoot, "BrowserSearch");
+            var command = "Set-Location -LiteralPath '" + folder.Replace("'", "''") + "'\nnpm ci";
+            var content = new StackPanel { Spacing = 12 };
+            content.Children.Add(new TextBlock { Text = "このアプリのウェブ検索には Node.js 20 以降と Microsoft Edge が必要です。配布版に依存パッケージが含まれる場合、手順 2 は不要です。", TextWrapping = TextWrapping.Wrap });
+            content.Children.Add(new TextBlock { Text = "1. Node.js と npm をインストールし、PowerShell で node --version と npm --version を確認します。\n2. 下のコマンドを PowerShell で実行します。インストール先に書き込み権限が必要です。\n3. チャットのツール設定でウェブ検索を有効にして検索します。", TextWrapping = TextWrapping.Wrap });
+            content.Children.Add(new TextBox { Text = command, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap });
+            var dialog = new ContentDialog { XamlRoot = RootLayout.XamlRoot, Title = "Playwright MCP の設定手順", Content = content, PrimaryButtonText = "公式ドキュメント", CloseButtonText = "閉じる" };
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+                Process.Start(new ProcessStartInfo("https://playwright.dev/mcp/installation") { UseShellExecute = true });
+        }
+        catch (Exception ex) { ShowError("設定手順を開けません: " + ex.Message); }
+    }
+
+    private string AssetPath(string? path, string defaultPath)
+    {
+        var value = Settings.UnquotePath(path);
+        if (string.IsNullOrWhiteSpace(value)) value = defaultPath;
+        return string.IsNullOrWhiteSpace(value) ? "" : Path.GetFullPath(Environment.ExpandEnvironmentVariables(value), settings.RepositoryRoot);
+    }
+    private Grid FilePathEditor(TextBox input, string label)
+    {
+        Form.Children.Remove(input); input.Header = null;
+        var grid = new Grid { ColumnSpacing = 8 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var button = new Button { Content = "参照" };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(button, label);
+        button.Click += (_, _) => ShowFileBrowser(input.Text, false, false, new[] { ".gguf" }, paths => input.Text = paths[0]);
+        serverPickButtons = serverPickButtons.Append(button).ToArray();
+        Grid.SetColumn(button, 1); grid.Children.Add(input); grid.Children.Add(button); return grid;
+    }
+    private async void ShowServerValidationError(string message)
+    {
+        try { await new ContentDialog { XamlRoot = RootLayout.XamlRoot, Title = "サーバーを起動できません", Content = message, CloseButtonText = "閉じる" }.ShowAsync(); }
+        catch (Exception ex) { if (!closing) ShowError(ex.Message); }
+    }
     private void OnSaveServerSettings(object sender, RoutedEventArgs e) => Execute(() => saveServerSettings?.Invoke());
     private void OnToggleServer(object sender, RoutedEventArgs e) => Execute(() => {
         if (runner.IsRunning("llama-server")) { StopCodexLanProxy(); runner.Stop("llama-server"); return; }
@@ -400,6 +466,15 @@ public sealed partial class MainWindow : Window
     {
         if (serverStatus.IsStarting || runner.IsRunning("llama-server")) return;
         if (serverStatus.IsConnected) return;
+        var modelPath = AssetPath(args.GetValueOrDefault("ModelPath"), Settings.DefaultModelPath);
+        var mmprojPath = AssetPath(args.GetValueOrDefault("MmprojPath"), Settings.DefaultMmprojPath);
+        var exePath = AssetPath(args.GetValueOrDefault("ServerExe"), Settings.DefaultServerExe);
+        if (modelPath.Length == 0) { ShowServerValidationError("モデルが選択されていません。サーバー設定で GGUF モデルを選択してください。"); return; }
+        if (!File.Exists(modelPath)) { ShowServerValidationError("モデルが見つかりません: " + modelPath); return; }
+        if (mmprojPath.Length > 0 && !Path.GetFileName(exePath).Equals("local-rocm.exe", StringComparison.OrdinalIgnoreCase) && !File.Exists(mmprojPath))
+        { ShowServerValidationError("画像入力用 mmproj が見つかりません: " + mmprojPath); return; }
+        args["ModelPath"] = modelPath; args["MmprojPath"] = mmprojPath; args["ServerExe"] = exePath;
+        localVisionEnabled = mmprojPath.Length > 0 && !Path.GetFileName(exePath).Equals("local-rocm.exe", StringComparison.OrdinalIgnoreCase);
         args["ContextSize"] = settings.ContextSize.ToString(CultureInfo.InvariantCulture);
         args["Threads"] = settings.Threads.ToString(CultureInfo.InvariantCulture);
         args["MtpDraftTokens"] = settings.MtpDraftTokens.ToString(CultureInfo.InvariantCulture);
@@ -427,6 +502,7 @@ public sealed partial class MainWindow : Window
             ? "このアプリで起動したサーバーだけ終了できます。" : null);
         ToolTipService.SetToolTip(ServerSaveButton, active ? "保存した設定は次回起動時に反映されます。" : "設定を保存します。");
         foreach (var input in serverLaunchInputs) input.IsEnabled = !active;
+        foreach (var button in serverPickButtons) button.IsEnabled = !active;
     }
     private void UpdateStatus()
     {
@@ -488,19 +564,33 @@ public sealed partial class MainWindow : Window
         package.SetText(CodexLanConnection.BashCommand(url, lanModel, maximumChatContext.Value));
         Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
     }
-    private async Task PickCliDirectoryAsync(TextBox input)
+    private Task PickCliDirectoryAsync(TextBox input)
     {
-        try {
-            var picker = new Windows.Storage.Pickers.FolderPicker { SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.ComputerFolder };
-            picker.FileTypeFilter.Add("*");
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-            var folder = await picker.PickSingleFolderAsync();
-            if (folder != null && !closing) {
-                input.Text = folder.Path;
-                settings.CliWorkingDirectory = folder.Path;
-                settings.Save();
-            }
-        } catch (Exception e) { if (!closing) ShowError("フォルダーを選択できません: " + e.Message); }
+        ShowFileBrowser(input.Text, true, false, Array.Empty<string>(), paths => Execute(() => {
+            input.Text = paths[0]; settings.CliWorkingDirectory = paths[0]; settings.Save();
+        }));
+        return Task.CompletedTask;
+    }
+    private void ShowFileBrowser(string initialPath, bool folders, bool multiple, string[] extensions, Action<string[]> selected)
+    {
+        var browser = new LocalLlm.Gui.Controls.EmbeddedFileBrowser(initialPath, folders, multiple, extensions);
+        var hidden = RootLayout.Children.OfType<FrameworkElement>().Where(x => x != AppTitleBar && x != NotificationScroll).Select(x => (Element: x, x.Visibility)).ToArray();
+        var previousFocus = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(RootLayout.XamlRoot) as Control;
+        bool paneToggleVisible = AppTitleBar.IsPaneToggleButtonVisible;
+        AppTitleBar.IsPaneToggleButtonVisible = false;
+        foreach (var item in hidden) item.Element.Visibility = Visibility.Collapsed;
+        Grid.SetRow(browser, 1); Grid.SetRowSpan(browser, 2);
+        RootLayout.Children.Add(browser);
+        bool closed = false;
+        void Close() {
+            if (closed) return;
+            closed = true; RootLayout.Children.Remove(browser);
+            AppTitleBar.IsPaneToggleButtonVisible = paneToggleVisible;
+            foreach (var item in hidden) item.Element.Visibility = item.Visibility;
+            previousFocus?.Focus(FocusState.Programmatic);
+        }
+        browser.Cancelled += Close;
+        browser.Selected += paths => { Close(); if (!closing) selected(paths); };
     }
     private void OpenCli(string script, bool capture, string directory)
     {
@@ -510,8 +600,9 @@ public sealed partial class MainWindow : Window
         if (script is not ("Start-LocalClaude.ps1" or "Start-LocalCodex.ps1")) throw new ArgumentException("未対応の CLI です。");
         var localScript = Path.Combine(AppContext.BaseDirectory, "Cli", script);
         if (!File.Exists(localScript)) throw new FileNotFoundException("同梱の CLI 起動スクリプトが見つかりません。GUI を再ビルドしてください。", localScript);
+        var directoryPath = Settings.UnquotePath(directory);
         var workingDirectory = Path.GetFullPath(Environment.ExpandEnvironmentVariables(
-            string.IsNullOrWhiteSpace(directory) ? settings.RepositoryRoot : directory.Trim()), settings.RepositoryRoot);
+            string.IsNullOrWhiteSpace(directoryPath) ? settings.RepositoryRoot : directoryPath), settings.RepositoryRoot);
         if (!Directory.Exists(workingDirectory)) throw new DirectoryNotFoundException("作業ディレクトリが見つかりません: " + workingDirectory);
         settings.CliWorkingDirectory = workingDirectory;
         settings.Save();
@@ -536,6 +627,10 @@ public sealed partial class MainWindow : Window
             maximumChatContext = null;
             if (server != null) try { maximumChatContext = ChatContextUsage.Maximum(System.Text.Json.Nodes.JsonNode.Parse(server)); } catch (JsonException) { }
             if (server != null) try { using var props = JsonDocument.Parse(server); if (props.RootElement.TryGetProperty("model_alias", out var alias)) model = alias.GetString() ?? ""; } catch (JsonException) { }
+            if (server != null && !runner.IsRunning("llama-server")) {
+                localVisionEnabled = false;
+                try { using var props = JsonDocument.Parse(server); if (props.RootElement.ValueKind == JsonValueKind.Object && props.RootElement.TryGetProperty("modalities", out var modalities) && modalities.ValueKind == JsonValueKind.Object && modalities.TryGetProperty("vision", out var vision)) localVisionEnabled = vision.ValueKind == JsonValueKind.True; } catch (JsonException) { }
+            }
             serverStatus.SetConnection(server != null, model);
             lanModel = model;
             if (server != null) {

@@ -42,8 +42,7 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$ModelPath = 'models\Qwen3.8-27B-Uncensored\Qwen3.8-27B-Uncensored-Q4_K_M.gguf',
 
-    [ValidateNotNullOrEmpty()]
-    [string]$MmprojPath = 'models\Qwen3.8-27B-Uncensored\mmproj-Qwen3.8-27B-Uncensored-F16.gguf',
+    [string]$MmprojPath = '',
 
     [string]$ServerExe,
 
@@ -84,7 +83,8 @@ if (-not [System.IO.Path]::IsPathRooted($ServerExe)) {
 # Defaults remain relative to this launcher; explicit absolute paths are accepted.
 if ([System.IO.Path]::IsPathRooted($ModelPath)) { $modelPath = [System.IO.Path]::GetFullPath($ModelPath) }
 else { $modelPath = Join-Path $PSScriptRoot $ModelPath }
-if ([System.IO.Path]::IsPathRooted($MmprojPath)) { $mmprojPath = [System.IO.Path]::GetFullPath($MmprojPath) }
+if ([string]::IsNullOrWhiteSpace($MmprojPath)) { $mmprojPath = '' }
+elseif ([System.IO.Path]::IsPathRooted($MmprojPath)) { $mmprojPath = [System.IO.Path]::GetFullPath($MmprojPath) }
 else { $mmprojPath = Join-Path $PSScriptRoot $MmprojPath }
 $modelAlias = [System.IO.Path]::GetFileNameWithoutExtension($modelPath)
 
@@ -92,7 +92,7 @@ if (-not (Test-Path -LiteralPath $ServerExe -PathType Leaf)) {
     Write-Error "llama-server.exe が見つかりません: $ServerExe（runtime\llama.cpp に実行環境を配置してください）"
     exit 1
 }
-if (-not (Test-Path -LiteralPath $modelPath)) {
+if (-not (Test-Path -LiteralPath $modelPath -PathType Leaf)) {
     Write-Error "GGUF モデルが見つかりません: $modelPath"
     exit 1
 }
@@ -108,7 +108,7 @@ if ([IO.Path]::GetFileName($ServerExe) -ieq 'local-rocm.exe') {
     & $ServerExe serve $modelPath $RocmBin ([string]$ContextSize) $nativeHost '9931'
     exit $LASTEXITCODE
 }
-if (-not (Test-Path -LiteralPath $mmprojPath -PathType Leaf)) {
+if ($mmprojPath -and -not (Test-Path -LiteralPath $mmprojPath -PathType Leaf)) {
     Write-Error "画像入力用 mmproj が見つかりません: $mmprojPath"
     exit 1
 }
@@ -120,7 +120,6 @@ if (Get-NetTCPConnection -LocalPort 9931 -State Listen -ErrorAction SilentlyCont
 $listenAddress = if ($LanAccess) { '0.0.0.0' } else { '127.0.0.1' }
 $serverArgs = @(
     '-m', $modelPath,
-    '--mmproj', $mmprojPath,
     '--alias', $modelAlias,
     '-ngl', '99',
     '-c', [string]$ContextSize,
@@ -144,7 +143,9 @@ $serverArgs = @(
     '--no-webui'
 )
 
-if ($modelAlias -eq 'Qwen3.8-27B-Uncensored-Q4_K_M') {
+if ($mmprojPath) { $serverArgs += @('--mmproj', $mmprojPath) }
+
+if ($mmprojPath -and $modelAlias -eq 'Qwen3.8-27B-Uncensored-Q4_K_M') {
     $serverArgs += @('--image-min-tokens', '1024')
 }
 

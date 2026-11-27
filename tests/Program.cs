@@ -99,6 +99,9 @@ try
     var oldSettings = System.Text.Json.JsonSerializer.Deserialize<Settings>("{\"RepositoryRoot\":\"C:/external\",\"Threads\":8}")!;
     Assert(oldSettings.RepositoryRoot != "C:/external" && oldSettings.Threads == 8, "Legacy external root must be ignored without losing preferences");
     Assert(!oldSettings.ServerLanAccess, "Existing settings must default to loopback access");
+    Assert(new Settings().ModelPath == "" && new Settings().MmprojPath == "", "New model settings must be empty");
+    Assert(Settings.UnquotePath("  \"C:\\models\\my model.gguf\"  ") == @"C:\models\my model.gguf", "Explorer path quotes must be removed");
+    Assert(Settings.UnquotePath(@"C:\models\my model.gguf") == @"C:\models\my model.gguf" && Settings.UnquotePath("\"unterminated") == "\"unterminated", "Unquoted and malformed paths must remain intact");
     Assert(oldSettings.ExplorerSectionExpanded && oldSettings.ChatSectionExpanded && oldSettings.GitSectionExpanded, "Legacy settings must keep sections open");
     var panes = System.Text.Json.JsonSerializer.Deserialize<Settings>(System.Text.Json.JsonSerializer.Serialize(new Settings {
         ExplorerPaneHeight = 375, GitPaneHeight = 225, ExplorerSectionExpanded = false, ChatSectionExpanded = false, GitSectionExpanded = false
@@ -122,6 +125,12 @@ try
     Assert(logs.Any(s => s.Contains("MOCK-SERVER-OK") && s.Contains("--host 127.0.0.1") && s.Contains("--alias model") && s.Contains("-c 131072")), "Default executable resolution and model-relative arguments must reach the mock server");
     Assert(logs.Any(s => s.Contains("[launcher] 終了コード 0")), "Real launcher must succeed with a mock executable");
     Console.WriteLine("PASS: real server launcher in Windows PowerShell with mocked executable; no model loaded");
+    logs.Clear();
+    var textHarness = Path.Combine(root, "text-harness.ps1");
+    File.WriteAllText(textHarness, File.ReadAllText(harness).Replace("-MmprojPath mmproj.gguf", "-MmprojPath ''"), new System.Text.UTF8Encoding(true));
+    runner.Start("text-launcher", ProcessRunner.PowerShell, root, ProcessRunner.ScriptArguments(textHarness, new Dictionary<string, string?>()));
+    await Wait(() => logs.Any(s => s.Contains("[text-launcher] 終了コード")));
+    Assert(logs.Any(s => s.Contains("MOCK-SERVER-OK") && !s.Contains("--mmproj")) && logs.Any(s => s.Contains("[text-launcher] 終了コード 0")), "Empty mmproj must start a text-only server");
     logs.Clear();
     var lanHarness = Path.Combine(root, "lan-harness.ps1");
     File.WriteAllText(lanHarness, File.ReadAllText(harness) + " -LanAccess:$LanAccess", new System.Text.UTF8Encoding(true));

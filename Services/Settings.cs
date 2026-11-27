@@ -9,8 +9,8 @@ public sealed class Settings
     public string RepositoryRoot => ResolveRoot(AppContext.BaseDirectory);
     [JsonIgnore]
     public string DefaultWorkspaceDirectory => Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-    public const string DefaultModelPath = @"models\Qwen3.8-27B-Uncensored\Qwen3.8-27B-Uncensored-Q4_K_M.gguf";
-    public const string DefaultMmprojPath = @"models\Qwen3.8-27B-Uncensored\mmproj-Qwen3.8-27B-Uncensored-F16.gguf";
+    public const string DefaultModelPath = "";
+    public const string DefaultMmprojPath = "";
     public const string DefaultServerExe = @"runtime\native\local-rocm.exe";
     public string ModelPath { get; set; } = DefaultModelPath;
     public string MmprojPath { get; set; } = DefaultMmprojPath;
@@ -32,6 +32,7 @@ public sealed class Settings
     public bool InvestigationShowReasoning { get; set; } = false;
     public bool EditorAutoSave { get; set; } = true;
     public bool EditorWordWrap { get; set; } = true;
+    public bool DismissErrorsAutomatically { get; set; } = true;
     private double appScale = 1.0;
     public double AppScale
     {
@@ -51,6 +52,11 @@ public sealed class Settings
     public List<ChatWorkspace> ChatWorkspaces { get; set; } = new();
     public string LastChatId { get; set; } = "";
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LocalLlmGui");
+    public static string UnquotePath(string? path)
+    {
+        var value = path?.Trim() ?? "";
+        return value.Length >= 2 && value[0] == '"' && value[^1] == '"' ? value[1..^1] : value;
+    }
     public static string NodeExecutable
     {
         get

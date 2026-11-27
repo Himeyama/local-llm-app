@@ -116,7 +116,8 @@ public sealed partial class WorkspaceExplorerView : Grid
             var path = Path.GetFullPath(workspace);
             if (selectedPath != null) {
                 for (var parent = Path.GetDirectoryName(selectedPath); parent != null && (parent.Equals(path, StringComparison.OrdinalIgnoreCase) || parent.StartsWith(Path.TrimEndingDirectorySeparator(path) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)); parent = Path.GetDirectoryName(parent)) expanded.Add(parent);
-                if (Directory.Exists(selectedPath)) expanded.Add(selectedPath);
+                if (await Task.Run(() => Directory.Exists(selectedPath))) expanded.Add(selectedPath);
+                if (revision != version) return;
             }
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
             var root = CreateNode(new WorkspaceEntry(name.Length == 0 ? path : name, path, true, false));

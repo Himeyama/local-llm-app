@@ -98,7 +98,6 @@
       <Grid x:Name="PageLayout" Grid.Column="2" Padding="0,6,24,20" RowSpacing="16">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <TextBlock x:Name="PageTitle" Text="llama-server" FontSize="28" FontWeight="SemiBold"/>
-        <InfoBar x:Name="Notice" Grid.Row="1" IsOpen="False" IsClosable="True"/>
         <Grid Grid.Row="2" RowSpacing="12">
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
           <CommandBar x:Name="ServerCommandBar" Visibility="Collapsed" DefaultLabelPosition="Right" IsDynamicOverflowEnabled="True" Background="Transparent">
@@ -178,10 +177,12 @@
             <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" SizeChanged="OnChatSizeChanged" ViewChanged="OnChatViewChanged"><StackPanel x:Name="ChatMessages" Spacing="18" Padding="0,12,12,16"/></ScrollViewer>
             <Grid x:Name="ChatMapHost" Visibility="Collapsed"/>
-            <Grid x:Name="ChatActivityPanel" Grid.Row="1" Visibility="Collapsed" Opacity="0.6" ColumnSpacing="6" SizeChanged="OnConsoleLayoutChanged">
-              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+            <Grid x:Name="ChatActivityPanel" Grid.Row="1" HorizontalAlignment="Left" Visibility="Collapsed" Opacity="0.6" ColumnSpacing="6" SizeChanged="OnConsoleLayoutChanged">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
               <TextBlock x:Name="ChatActivitySpinner" FontFamily="Segoe UI Symbol" MinWidth="16"/>
-              <TextBlock x:Name="ChatActivity" Grid.Column="1" TextWrapping="Wrap"/>
+              <FontIcon x:Name="ChatActivityToolIcon" FontSize="14" Visibility="Collapsed"/>
+              <TextBlock x:Name="ChatActivity" Grid.Column="1" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+              <TextBlock x:Name="ChatActivitySuffix" Grid.Column="2"/>
             </Grid>
             <ScrollViewer x:Name="PendingChatScroll" Grid.Row="2" MaxHeight="96" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" SizeChanged="OnConsoleLayoutChanged">
               <StackPanel x:Name="PendingChatMessages" Spacing="4" Opacity="0.65"/>
@@ -191,7 +192,7 @@
               <local:SquircleSurface Fill="{ThemeResource SolidBackgroundFillColorBaseBrush}" CornerRadius="23" Margin="1" IsHitTestVisible="False"/>
               <local:SquircleSurface Fill="{ThemeResource TextControlBackground}" CornerRadius="23" Margin="1" IsHitTestVisible="False"/>
               <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                <StackPanel x:Name="AttachmentList" Spacing="6" Margin="12,8,12,0" Visibility="Collapsed"/>
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"><StackPanel x:Name="AttachmentList" Orientation="Horizontal" Spacing="6" Margin="12,8,12,0" Visibility="Collapsed"/></ScrollViewer>
                 <Grid Grid.Row="1">
                   <TextBox x:Name="ChatInput" PlaceholderText="メッセージを入力（Enter で送信、Shift+Enter で改行）" AcceptsReturn="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0" CornerRadius="12" Padding="12,12,12,52" MinHeight="120" MaxHeight="240" PreviewKeyDown="OnChatKeyDown" TextChanged="OnChatInputTextChanged" GotFocus="OnChatInputGotFocus" LostFocus="OnChatInputLostFocus">
                     <TextBox.Resources>
@@ -258,6 +259,9 @@
         <TextBlock x:Name="ChatStatusText" Grid.Column="4" Visibility="Collapsed" TextWrapping="NoWrap" FontSize="12" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" ToolTipService.ToolTip="直近の推論の入力と生成の合計トークン数 / サーバーの最大コンテキスト数。使用数は応答取得後に更新します。"/>
       </Grid>
     </Border>
+    <ScrollViewer x:Name="NotificationScroll" Grid.RowSpan="3" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="16,16,16,48" MaxWidth="440" MaxHeight="400" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="Collapsed" Canvas.ZIndex="100">
+      <StackPanel x:Name="Notifications" Spacing="8"/>
+    </ScrollViewer>
   </Grid>
   </Viewbox>
   </Grid>

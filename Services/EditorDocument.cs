@@ -98,7 +98,11 @@ public sealed class EditorDocument
 
     public static string Normalize(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
 
-    private static async Task<byte[]> ReadBoundedAsync(string path)
+    // Opening a cloud placeholder can synchronously wait for hydration, even when
+    // the FileStream is configured for asynchronous reads.
+    private static Task<byte[]> ReadBoundedAsync(string path) => Task.Run(() => ReadBoundedCoreAsync(path));
+
+    private static async Task<byte[]> ReadBoundedCoreAsync(string path)
     {
         using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 8192, true);
         if (input.Length > MaximumBytes) throw new IOException("編集できるファイルサイズの上限は 8 MiB です。");

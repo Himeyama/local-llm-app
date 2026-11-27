@@ -78,7 +78,7 @@ public sealed partial class FileEditorView
             var document = await EditorDocument.OpenAsync(tab.Document.Path, encoding);
             tab.Document = document; tab.AutoSaveFailed = false; tab.Revision++;
             Post(new { type = "replace", id = tab.Id, text = document.Text, revision = tab.Revision });
-            notice.IsOpen = false; UpdateTab(tab);
+            UpdateTab(tab);
         }
         catch (Exception ex) { Report(ex); }
         finally { dialogOpen = false; ScheduleAutoSave(); }

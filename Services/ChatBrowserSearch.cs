@@ -25,7 +25,7 @@ public static class ChatBrowserSearch
         info.ArgumentList.Add(script);
         using var process = new Process { StartInfo = info };
         try { process.Start(); }
-        catch (System.ComponentModel.Win32Exception ex) { throw new IOException("バックグラウンド検索を起動できません。Node.js 18 以降をインストールしてください。", ex); }
+        catch (System.ComponentModel.Win32Exception ex) { throw new IOException("バックグラウンド検索を起動できません。Node.js 20 以降をインストールしてください。", ex); }
         try
         {
             // Read both pipes immediately so diagnostic output cannot deadlock.

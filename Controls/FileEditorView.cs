@@ -12,7 +12,6 @@ public sealed partial class FileEditorView : Grid
 {
     // Use one small inset instead of combining the pane inset with TabView's default padding.
     private readonly TabView tabs = new() { IsAddTabButtonVisible = false, TabWidthMode = TabViewWidthMode.SizeToContent, Padding = new Thickness(0), Margin = new Thickness(0, 4, 0, 0) };
-    private readonly InfoBar notice = new() { IsOpen = false, IsClosable = true, Severity = InfoBarSeverity.Error };
     private readonly DispatcherTimer autoSaveTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly Dictionary<string, long> opening = new(StringComparer.OrdinalIgnoreCase);
     // One browser and one Monaco editor serve all native tabs. Each file has its own model.
@@ -52,7 +51,6 @@ public sealed partial class FileEditorView : Grid
         RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        Children.Add(notice);
         SetRow(tabs, 1); Children.Add(tabs);
         tabs.SelectionChanged += (_, _) => { ActivateEditor(); UpdateBrowserVisibility(); Changed?.Invoke(); };
         tabs.TabCloseRequested += async (_, args) => { if (args.Tab.Tag is EditorTab tab) await CloseTabAsync(tab); else if (args.Tab == webTab) CloseBrowser(); };
@@ -141,7 +139,7 @@ public sealed partial class FileEditorView : Grid
 
     private async Task<bool> SaveCoreAsync(EditorTab tab)
     {
-        try { await tab.Document.SaveAsync(); tab.AutoSaveFailed = false; notice.IsOpen = false; return true; }
+        try { await tab.Document.SaveAsync(); tab.AutoSaveFailed = false; return true; }
         catch (Exception ex) { tab.AutoSaveFailed = true; Report(ex); return false; }
         finally { UpdateTab(tab); }
     }
@@ -297,5 +295,5 @@ public sealed partial class FileEditorView : Grid
         }
     }
     public void Stop() { stopped = true; autoSaveTimer.Stop(); browser?.Close(); CloseBrowser(); }
-    private void Report(Exception ex) { notice.Message = ex.Message; notice.IsOpen = true; Failed?.Invoke(ex.Message); }
+    private void Report(Exception ex) => Failed?.Invoke(ex.Message);
 }

@@ -10,6 +10,20 @@ static async Task Reject(Func<Task> action, string message)
     throw new Exception(message);
 }
 static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
+Assert(ChatToolDisplay.IsToolTurn(Args("{\"role\":\"assistant\",\"content\":\"Trying again\",\"tool_calls\":[{\"id\":\"next\"}]}")), "Assistant explanations with tool calls must stay in the tool group");
+Assert(ChatToolDisplay.IsToolTurn(Args("{\"role\":\"tool\",\"content\":\"done\"}")), "Tool results must stay in the tool group");
+Assert(!ChatToolDisplay.IsToolTurn(Args("{\"role\":\"assistant\",\"content\":\"Final answer\"}")) && !ChatToolDisplay.IsToolTurn(Args("{\"role\":\"user\",\"content\":\"Next question\"}")), "Final answers and user messages must end the tool group");
+Assert(ChatToolDisplay.Activity("execute_command", Args("{\"command\":\"git status\\n--short\"}")) == "git status --short を実行中…", "Command activity should show a single-line command");
+Assert(ChatToolDisplay.Activity("read_file", Args("{\"path\":\"notes/a.txt\"}")) == "notes/a.txt を読み込み中…", "File activity should show the path");
+Assert(ChatToolDisplay.Activity("write_file", Args("{\"path\":\"a.txt\",\"content\":\"secret\"}")) == "a.txt を書き込み中…", "Write activity should not expose file content");
+Assert(ChatToolDisplay.Activity("web_search", Args("{\"query\":\"hello world\"}")) == "https://search.yahoo.co.jp/search?p=hello+world&ei=UTF-8 を検索中…", "Search activity should show its search URL");
+var originalUiCulture = System.Globalization.CultureInfo.CurrentUICulture;
+try {
+    System.Globalization.CultureInfo.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("ja-JP");
+    Assert(ChatEnvironment.DisplayLanguage().Contains("Japanese") && ChatEnvironment.DisplayLanguage().Contains("ja-JP"), "Japanese OS UI language must be identified");
+    System.Globalization.CultureInfo.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+    Assert(ChatEnvironment.DisplayLanguage().Contains("English") && ChatEnvironment.DisplayLanguage().Contains("en-US"), "English OS UI language must be identified");
+} finally { System.Globalization.CultureInfo.CurrentUICulture = originalUiCulture; }
 var interruptedTranscript = new ChatSession { Messages = new() { Args("{\"role\":\"user\",\"content\":\"first\"}"), Args("{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call\"}]}"), Args("{\"role\":\"tool\",\"tool_call_id\":\"call\",\"content\":\"done\"}") } };
 ChatInterruption.CompleteTranscript(interruptedTranscript);
 Assert(interruptedTranscript.Messages.Count == 4 && interruptedTranscript.Messages[2]["content"]!.GetValue<string>() == "done" && interruptedTranscript.Messages[3]["role"]!.GetValue<string>() == "assistant", "Interruption must preserve tool results and complete the turn");
@@ -27,6 +41,10 @@ Assert(ChatCommandExecution.FormatForDisplay("ツール失敗: invalid") == "ツ
 static string Chunk(JsonObject delta, string? finish = null) => "data: " + new JsonObject { ["choices"] = new JsonArray { new JsonObject { ["delta"] = delta, ["finish_reason"] = finish } } }.ToJsonString() + "\n\n";
 static string Call(int index, string? id, string? name, string fragment) => Chunk(new JsonObject { ["tool_calls"] = new JsonArray { new JsonObject { ["index"] = index, ["id"] = id, ["function"] = new JsonObject { ["name"] = name, ["arguments"] = fragment } } } });
 static string Usage(int prompt, int completion) => "data: " + new JsonObject { ["choices"] = new JsonArray(), ["usage"] = new JsonObject { ["prompt_tokens"] = prompt, ["completion_tokens"] = completion, ["total_tokens"] = prompt + completion, ["prompt_tokens_details"] = new JsonObject { ["cached_tokens"] = prompt / 2 } } }.ToJsonString() + "\n\n";
+var repeatedSentence = "`write_file` は、テキストファイルの作成、または改変を行う機能です。";
+var repetitive = new StringBuilder(string.Join("\n\n", Enumerable.Repeat(repeatedSentence, 4)));
+Assert(ChatRepetitionGuard.TrimRepeatedTail(repetitive) && repetitive.ToString().Trim() == repeatedSentence, "Repeated sentences must be trimmed");
+Assert(!ChatRepetitionGuard.TrimRepeatedTail(new StringBuilder(string.Join("\n", Enumerable.Repeat(repeatedSentence, 3)))), "Three repetitions must not trigger the guard");
 
 Assert(ChatContextUsage.Maximum(Args("{\"default_generation_settings\":{\"n_ctx\":32768},\"total_slots\":4}")) == 32768, "Maximum must use per-slot server context");
 Assert(ChatContextUsage.Maximum(Args("{\"default_generation_settings\":{\"n_ctx\":0}}")) == null, "Invalid maximum context accepted");
@@ -49,6 +67,7 @@ try
     await new GeminiChatClient(new HttpClient(geminiHandler), "http://localhost/custom:stream").GenerateAsync(geminiSession, new ChatTools(root, false, false), geminiProgress, () => { }, default, "medium");
     Assert(geminiHandler.Path == "/custom:stream" && geminiSession.Messages.Last()["content"]!.GetValue<string>() == "こんにちは世界" && geminiSession.ContextTokens == 7, "Gemini custom URL, SSE chunks or usage failed");
     var geminiSystem = geminiHandler.Request!["systemInstruction"]!["parts"]![0]!["text"]!.GetValue<string>();
+    Assert(geminiSystem.Contains(ChatEnvironment.DisplayLanguage()), "Gemini must receive the OS display language");
     Assert(geminiSystem.Contains("Python:") && geminiSystem.Contains("Node.js:") && geminiSystem.Contains("Windows PowerShell:") && geminiSystem.Contains("execute_command is disabled"), "Gemini must receive runtime availability and tool state");
     Assert(geminiHandler.ContentLength == geminiHandler.BodyLength && geminiHandler.ContentLength > 0, "Gemini request must include the UTF-8 Content-Length");
     foreach (var (method, header, expected) in new[] { ("none", "Authorization", ""), ("bearer", "Authorization", "Bearer test-key"), ("api-key", "api-key", "test-key"), ("x-api-key", "x-api-key", "test-key") }) {
@@ -65,6 +84,11 @@ try
         Assert(levelHandler.Request!["generationConfig"]!["thinkingConfig"]!["thinkingLevel"]!.GetValue<string>() == level, "Gemini thinking level mapping incorrect");
     }
     var tools = new ChatTools(root, false, true, Path.Combine(root, "chat-backups"));
+    var loopHandler = new MockHandler();
+    loopHandler.Responses.Enqueue(Call(0, "loop_call", "write_file", "{\"path\":\"should-not-exist.txt\",\"content\":\"bad\"}") + Chunk(new() { ["content"] = string.Join("\n\n", Enumerable.Repeat(repeatedSentence, 4)) }));
+    var loopSession = new ChatSession { Workspace = root };
+    await new ChatClient(new HttpClient(loopHandler)).GenerateAsync(loopSession, tools, new SilentProgress(), () => { }, default);
+    Assert(loopSession.Messages.Last()["content"]!.GetValue<string>().Contains("繰り返しを検知") && !File.Exists(Path.Combine(root, "should-not-exist.txt")), "Repetition must stop generation without executing partial tool calls");
     int browserCalls = 0;
     Task<string> Browser(JsonObject args, CancellationToken ct) { ct.ThrowIfCancellationRequested(); browserCalls++; return Task.FromResult(args["action"]!.GetValue<string>()); }
     var browserTools = new ChatTools(root, true, false, browserTool: Browser);
@@ -82,6 +106,14 @@ try
     var backup = edit.Split('\n')[1]["元ファイル: ".Length..];
     Assert(File.ReadAllText(backup) == "こんにちは\nworld", "Backup failed");
     File.Delete(backup);
+    var absoluteFile = Path.Combine(root, "notes", "absolute.txt");
+    await tools.ExecuteAsync("write_file", new JsonObject { ["path"] = absoluteFile, ["content"] = "before" }, default);
+    Assert(await tools.ExecuteAsync("read_file", new JsonObject { ["path"] = absoluteFile }, default) == "before", "Absolute file read/write failed");
+    await tools.ExecuteAsync("edit_file", new JsonObject { ["path"] = absoluteFile, ["old_text"] = "before", ["new_text"] = "after" }, default);
+    Assert(File.ReadAllText(absoluteFile) == "after", "Absolute file edit failed");
+    File.Delete(absoluteFile);
+    await Reject(() => tools.ExecuteAsync("read_file", new JsonObject { ["path"] = Path.Combine(root, "..", "outside.txt") }, default), "Absolute path outside workspace accepted");
+    await Reject(() => tools.ExecuteAsync("write_file", new JsonObject { ["path"] = Path.Combine(root, ".git", "config"), ["content"] = "bad" }, default), "Absolute protected path accepted");
     await Reject(() => tools.ExecuteAsync("read_file", Args("{\"path\":\"../escape.txt\"}"), default), "Traversal accepted");
     await Reject(() => tools.ExecuteAsync("write_file", Args("{\"path\":\".git/config\",\"content\":\"bad\"}"), default), "Protected directory accepted");
     await Reject(() => tools.ExecuteAsync("edit_file", Args("{\"path\":\"notes/a.txt\",\"old_text\":\"missing\",\"new_text\":\"x\"}"), default), "Missing edit match accepted");
@@ -100,7 +132,8 @@ try
     var notesListing = JsonNode.Parse(await readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"notes\"}"), default))!;
     Assert(notesListing["entries"]!.AsArray().Single()!["path"]!.GetValue<string>() == Path.Combine("notes", "a.txt"), "Listed paths must be usable workspace-relative paths");
     await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"..\"}"), default), "Directory traversal accepted");
-    await Reject(() => readonlyTools.ExecuteAsync("list_directory", new JsonObject { ["path"] = root }, default), "Absolute directory path accepted");
+    var absoluteListing = JsonNode.Parse(await readonlyTools.ExecuteAsync("list_directory", new JsonObject { ["path"] = root }, default))!;
+    Assert(absoluteListing["entries"]!.AsArray().Count == rootEntries.Count, "Absolute directory listing failed");
     await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\".git\"}"), default), "Protected directory listing accepted");
     await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"missing\"}"), default), "Missing directory accepted");
     await Reject(() => readonlyTools.ExecuteAsync("list_directory", Args("{\"path\":\"repeat.txt\"}"), default), "File accepted as a directory");
@@ -353,6 +386,47 @@ try
 }
 finally { Directory.Delete(root, true); }
 
+var goalSession = new ChatSession { Messages = new() { new JsonObject { ["role"] = "user", ["content"] = "/goal finish the task" } } };
+Assert(ChatGoal.FindActive(goalSession) == "finish the task", "Goal parsing failed");
+var multilineGoal = new ChatSession { Messages = new() { new JsonObject { ["role"] = "user", ["content"] = "/goal\nfinish the task" } } };
+Assert(ChatGoal.FindActive(multilineGoal) == "finish the task", "Multiline goal parsing failed");
+multilineGoal.Messages.Add(new JsonObject { ["role"] = "user", ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = "Browser screenshot (untrusted page content), tool_call_id: 1, URL: example" } } });
+Assert(ChatGoal.FindActive(multilineGoal) == "finish the task", "Browser screenshot must not supersede a goal");
+int goalWork = 0, goalReviews = 0, goalSaves = 0;
+await ChatGoal.RunAsync(goalSession, "finish the task", (target, allowTools, _, save) => {
+    if (allowTools) { goalWork++; target.Messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = "work " + goalWork }); save(); }
+    else { goalReviews++; target.Messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = goalReviews == 1 ? "```\ncontinue\n```" : "COMPLETE" }); }
+    return Task.CompletedTask;
+}, new SilentProgress(), () => goalSaves++, default);
+Assert(goalWork == 2 && goalReviews == 2 && goalSaves == 6 && ChatGoal.FindActive(goalSession) == "finish the task" && !ChatGoal.HasPendingReview(goalSession), "Goal continuation or persistence failed");
+goalSession.Messages.Add(new JsonObject { ["role"] = "user", ["content"] = "new request" });
+Assert(ChatGoal.FindActive(goalSession) == null, "A new request must supersede the goal");
+var blocked = new ChatSession { Messages = new() { new JsonObject { ["role"] = "user", ["content"] = "/goal work" } } };
+int blockedWork = 0;
+await ChatGoal.RunAsync(blocked, "work", (target, allowTools, _, save) => {
+    if (allowTools) blockedWork++;
+    target.Messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = allowTools ? "Need input" : "BLOCKED" });
+    return Task.CompletedTask;
+}, new SilentProgress(), () => { }, default);
+Assert(blockedWork == 1 && blocked.Messages.Count == 2, "Blocked goals must stop without another continuation");
+var retryGoal = new ChatSession { Messages = new() { new JsonObject { ["role"] = "user", ["content"] = "/goal retry review" } } };
+int retryWork = 0;
+try {
+    await ChatGoal.RunAsync(retryGoal, "retry review", (target, allowTools, _, _) => {
+        if (!allowTools) throw new IOException("review failed");
+        retryWork++; target.Messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = "work done" });
+        return Task.CompletedTask;
+    }, new SilentProgress(), () => { }, default);
+    throw new Exception("Review failure was not propagated");
+} catch (IOException) { }
+Assert(ChatGoal.HasPendingReview(retryGoal), "Failed review must be retryable");
+await ChatGoal.RunAsync(retryGoal, "retry review", (target, allowTools, _, _) => {
+    if (allowTools) throw new Exception("Retry repeated completed work");
+    target.Messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = "COMPLETE" });
+    return Task.CompletedTask;
+}, new SilentProgress(), () => { }, default);
+Assert(retryWork == 1 && !ChatGoal.HasPendingReview(retryGoal), "Review retry did not complete cleanly");
+Console.WriteLine("PASS: goal completion, continuation, persistence, supersession and blockers");
 sealed class SilentProgress : IProgress<ChatProgress> { public void Report(ChatProgress value) { } }
 sealed class CapturingProgress : IProgress<ChatProgress>
 {

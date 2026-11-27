@@ -23,21 +23,21 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
                 ["name"] = name, ["description"] = description,
                 ["parameters"] = new JsonObject { ["type"] = "object", ["properties"] = properties, ["required"] = required, ["additionalProperties"] = false } } });
         }
-        Add("list_directory", "List immediate files and directories without reading their contents. Use path '.' for the workspace root. Returns name, workspace-relative path and type, sorted by name. Protected folders and links are excluded. Returns up to 200 entries; if next_offset is not null, use it as offset to retrieve the next page. Prefer this tool to search_files when inspecting a directory's structure.", ("path", "Workspace-relative directory path, or '.' for the root"));
+        Add("list_directory", "List immediate files and directories without reading their contents. Use path '.' for the workspace root. Returns name, workspace-relative path and type, sorted by name. Protected folders and links are excluded. Returns up to 200 entries; if next_offset is not null, use it as offset to retrieve the next page. Prefer this tool to search_files when inspecting a directory's structure.", ("path", "Workspace-relative or absolute directory path within the workspace, or '.' for the root"));
         tools.Last()!["function"]!["parameters"]!["properties"]!["offset"] = new JsonObject { ["type"] = "integer", ["minimum"] = 0, ["description"] = "Optional zero-based pagination offset; defaults to 0" };
         Add("search_files", "Search file paths and UTF-8 text in the selected workspace. Returns relative paths and matching lines. Empty query lists files recursively; use list_directory for immediate directory contents.", ("query", "Literal text or part of filename"));
-        Add("read_file", "Read a UTF-8 text file in the selected workspace (up to 1 MiB). Returns the first 50 lines by default and reports truncation. Set read_all to true to read all lines.", ("path", "Relative file path"));
+        Add("read_file", "Read a UTF-8 text file in the selected workspace (up to 1 MiB). Returns the first 50 lines by default and reports truncation. Set read_all to true to read all lines.", ("path", "Workspace-relative or absolute file path within the workspace"));
         tools.Last()!["function"]!["parameters"]!["properties"]!["read_all"] = new JsonObject { ["type"] = "boolean", ["description"] = "Read all lines instead of the first 50; defaults to false" };
         if (allowWrites)
         {
-            Add("write_file", "Create or overwrite a UTF-8 text file in the selected workspace. Existing files are backed up in chat-backups before replacement.", ("path", "Relative file path"), ("content", "Complete new contents"));
-            Add("edit_file", "Replace one unique exact occurrence of old_text in a UTF-8 file. Existing file is backed up. Fails if missing or ambiguous.", ("path", "Relative file path"), ("old_text", "Exact nonempty text occurring once"), ("new_text", "Replacement text"));
+            Add("write_file", "Create or overwrite a UTF-8 text file in the selected workspace. Existing files are backed up in chat-backups before replacement.", ("path", "Workspace-relative or absolute file path within the workspace"), ("content", "Complete new contents"));
+            Add("edit_file", "Replace one unique exact occurrence of old_text in a UTF-8 file. Existing file is backed up. Fails if missing or ambiguous.", ("path", "Workspace-relative or absolute file path within the workspace"), ("old_text", "Exact nonempty text occurring once"), ("new_text", "Replacement text"));
         }
         if (allowCommands)
         {
             Add("execute_command", "Run a non-interactive Windows PowerShell command from the selected workspace, including Python or Node.js scripts and file edits when needed. Returns stdout, stderr, exit_code and timed_out. Each output stream is limited to 20,000 characters and marked if truncated. Default timeout is 60 seconds; cancellation and timeout stop the process tree. Commands run with the app's user permissions, without a filesystem or network sandbox; file-tool restrictions and backups do not apply. Do not launch detached background processes or interactive windows.", ("command", "PowerShell command or multiline script, up to 8,000 characters"));
             var properties = tools.Last()!["function"]!["parameters"]!["properties"]!;
-            properties["working_directory"] = new JsonObject { ["type"] = "string", ["description"] = "Optional workspace-relative working directory; defaults to '.'" };
+            properties["working_directory"] = new JsonObject { ["type"] = "string", ["description"] = "Optional workspace-relative or absolute working directory within the workspace; defaults to '.'" };
             properties["timeout_seconds"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = 1800, ["description"] = "Optional timeout in seconds; defaults to 60" };
         }
         if (allowWeb)
@@ -55,9 +55,10 @@ public sealed class ChatTools(string workspace, bool allowWeb, bool allowWrites,
     private string ResolvePath(string relative, bool allowWorkspaceRoot)
     {
         if (string.IsNullOrWhiteSpace(workspace) || !Directory.Exists(workspace)) throw new IOException("作業フォルダーを選択してください。");
-        if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) || relative.Contains(':')) throw new IOException("相対パスを指定してください。");
+        if (string.IsNullOrWhiteSpace(relative) || (Path.IsPathRooted(relative) && !Path.IsPathFullyQualified(relative))) throw new IOException("相対パスまたは完全な絶対パスを指定してください。");
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workspace));
-        var full = Path.GetFullPath(relative, root);
+        var full = Path.IsPathFullyQualified(relative) ? Path.GetFullPath(relative) : Path.GetFullPath(relative, root);
+        if (full[Path.GetPathRoot(full)!.Length..].Contains(':')) throw new IOException("無効なパスです。");
         if (!(allowWorkspaceRoot && full.Equals(root, StringComparison.OrdinalIgnoreCase)) && !full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new IOException("作業フォルダー外の操作はできません。");
         // Check every existing component, including the workspace, for junctions/symlinks.
         for (var info = new DirectoryInfo(root); info != null; info = info.Parent)

@@ -32,6 +32,7 @@ using (var handler = new ContextHandler()) using (var http = new HttpClient(hand
     await new ChatClient(http).GenerateAsync(History(1), tools, new Quiet(), () => { }, default, "none");
     Check(handler.Requests[0]["reasoning_effort"]!.GetValue<string>() == "none" && !handler.Requests[0]["chat_template_kwargs"]!["enable_thinking"]!.GetValue<bool>(), "Off must disable thinking in the initial request");
     var system = handler.Requests[0]["messages"]![0]!["content"]!.GetValue<string>();
+    Check(system.Contains(ChatEnvironment.DisplayLanguage()), "Local chat must receive the OS display language");
     Check(system.Contains("Python:") && system.Contains("Node.js:") && system.Contains("Windows PowerShell:") && system.Contains("execute_command is disabled"), "Local chat must receive runtime availability and command state");
 }
 
